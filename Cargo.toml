@@ -13,3 +13,8 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[features]
+# Dynamically link Bevy for fast incremental debug builds (enabled by the `cargo dev` aliases).
+# Release builds leave this off, so they are statically linked.
+dev = ["bevy/dynamic_linking"]

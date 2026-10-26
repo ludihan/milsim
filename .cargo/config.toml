@@ -1,0 +1,7 @@
+# Debug builds dynamically link Bevy; release builds link it statically.
+#   cargo dev               -> debug build + run, Bevy as a dylib
+#   cargo dev-build         -> debug build only, Bevy as a dylib
+#   cargo run --release     -> optimized, statically linked
+[alias]
+dev = "run --features dev"
+dev-build = "build --features dev"
