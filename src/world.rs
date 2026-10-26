@@ -1145,7 +1145,7 @@ fn spawn_world(
         ..default()
     });
 
-    let spacing = 11.0;
+    let spacing = 9.5;
     let steps = (MAP_HALF * 2.0 / spacing) as i32;
     for gz in 0..steps {
         for gx in 0..steps {
@@ -1156,8 +1156,8 @@ fn spawn_world(
             let kind_roll = rng.f32();
             let scale = 0.75 + rng.f32() * 0.55;
             let yaw = rng.f32() * PI * 2.0;
-            let chance = if forest > 0.56 {
-                ((forest - 0.56) * 5.0).min(0.85)
+            let chance = if forest > 0.53 {
+                ((forest - 0.53) * 6.0).min(0.9)
             } else {
                 0.008
             };
