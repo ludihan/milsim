@@ -192,7 +192,7 @@ impl Vehicle {
         let pivot = tf.translation + tf.rotation * spec.turret_pos;
         if self.kind == VehicleKind::Heli && self.weapons[self.active].kind == WeaponKind::Rockets {
             let dir = tf.rotation * Vec3::new(0.0, -0.04, -1.0).normalize();
-            let side = if self.weapons[self.active].shots % 2 == 0 { 1.3 } else { -1.3 };
+            let side = if self.weapons[self.active].shots.is_multiple_of(2) { 1.3 } else { -1.3 };
             return (tf.translation + tf.rotation * Vec3::new(side, 1.2, -1.4), dir);
         }
         let dir = tf.rotation
@@ -216,7 +216,6 @@ pub struct VehicleAi {
     pub dismount_at_end: bool,
     pub arrived: bool,
     pub target: Option<Entity>,
-    pub target_pos: Vec3,
     pub scan: f32,
     pub stuck: f32,
     pub reverse: f32,
@@ -292,6 +291,13 @@ fn setup_vehicle_assets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let glass = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.15, 0.2, 0.25, 0.6),
+        alpha_mode: AlphaMode::Blend,
+        perceptual_roughness: 0.05,
+        metallic: 0.5,
+        ..default()
+    });
     let mut m = |c: Color, rough: f32, metallic: f32| {
         materials.add(StandardMaterial {
             base_color: c,
@@ -318,13 +324,7 @@ fn setup_vehicle_assets(
         sphere: meshes.add(Sphere::new(1.0)),
         paint,
         dark: m(Color::srgb(0.08, 0.08, 0.08), 0.9, 0.0),
-        glass: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.15, 0.2, 0.25, 0.6),
-            alpha_mode: AlphaMode::Blend,
-            perceptual_roughness: 0.05,
-            metallic: 0.5,
-            ..default()
-        }),
+        glass,
         metal: m(Color::srgb(0.15, 0.15, 0.15), 0.4, 0.7),
         wreck: m(Color::srgb(0.07, 0.065, 0.06), 1.0, 0.0),
     });
@@ -562,7 +562,7 @@ pub fn spawn_vehicle(
     root
 }
 
-fn handle_enter_exit(
+pub fn handle_enter_exit(
     mut enters: MessageReader<EnterVehicle>,
     mut exits: MessageReader<ExitVehicle>,
     mut soldiers: Query<(&mut Soldier, &mut Transform, &Health), Without<Vehicle>>,

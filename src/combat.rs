@@ -370,7 +370,7 @@ impl Weapon {
 
     pub fn is_tracer(&self) -> bool {
         let every = self.stats().tracer_every;
-        every > 0 && self.shots % every == 0
+        every > 0 && self.shots.is_multiple_of(every)
     }
 }
 
@@ -687,7 +687,7 @@ pub fn spawn_puff(
 #[derive(Clone, Copy)]
 enum Hit {
     Ground,
-    Obstacle(usize),
+    Obstacle,
     Soldier(Entity, bool),
     Vehicle(Entity),
 }
@@ -737,13 +737,13 @@ fn update_projectiles(
         let b = a + p.vel * dt;
 
         let mut best: Option<(f32, Hit)> = terrain.raycast(a, b).map(|t| (t, Hit::Ground));
-        let mut consider = |t: f32, h: Hit, best: &mut Option<(f32, Hit)>| {
+        let consider = |t: f32, h: Hit, best: &mut Option<(f32, Hit)>| {
             if best.is_none_or(|(bt, _)| t < bt) {
                 *best = Some((t, h));
             }
         };
-        if let Some((t, i)) = obstacles.segment_hit(a, b, BULLET) {
-            consider(t, Hit::Obstacle(i), &mut best);
+        if let Some((t, _)) = obstacles.segment_hit(a, b, BULLET) {
+            consider(t, Hit::Obstacle, &mut best);
         }
         let seg_mid = (a + b) * 0.5;
         let seg_r = a.distance(b) * 0.5 + 3.0;
@@ -846,7 +846,7 @@ fn update_projectiles(
                             sounds.write(PlaySound::new(SoundKind::Impact, hp).local());
                         }
                     }
-                    Hit::Obstacle(_) | Hit::Vehicle(_) => {
+                    Hit::Obstacle | Hit::Vehicle(_) => {
                         spawn_puff(&mut commands, &fx, &fx.spark, hp, 0.07, 0.08, Vec3::ZERO, 0.0);
                         spawn_puff(
                             &mut commands,
@@ -1006,7 +1006,7 @@ fn apply_suppression(mut events: MessageReader<Suppress>, mut soldiers: Query<&m
     }
 }
 
-fn apply_damage(
+pub fn apply_damage(
     mut events: MessageReader<Damage>,
     mut targets: Query<(&mut Health, Option<&Human>)>,
     attackers: Query<&Human>,
@@ -1043,6 +1043,7 @@ fn apply_damage(
             killed.write(Killed {
                 victim: ev.target,
                 attacker: ev.attacker,
+                headshot: ev.headshot,
             });
         }
     }

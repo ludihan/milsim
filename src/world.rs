@@ -284,7 +284,6 @@ pub fn line_of_sight(terrain: &Terrain, obstacles: &Obstacles, a: Vec3, b: Vec3)
 
 #[derive(Component)]
 pub struct Tree {
-    pub obstacle: usize,
     pub fall: Option<(Vec3, f32)>,
 }
 
@@ -1197,7 +1196,7 @@ fn spawn_world(
                         VisibilityRange::abrupt(0.0, 1500.0),
                     ))
                     .id();
-                let trunk = obstacles.add(Obstacle {
+                obstacles.add(Obstacle {
                     pos: Vec3::new(x, h - 0.2, z),
                     shape: Shape::Cyl {
                         r: 0.3 * scale,
@@ -1209,7 +1208,7 @@ fn spawn_world(
                     tree: true,
                 });
                 obstacles.add(Obstacle {
-                    pos: Vec3::new(x, h + if is_conifer { 5.0 } else { 5.0 } * scale, z),
+                    pos: Vec3::new(x, h + (if is_conifer { 5.5 } else { 5.0 }) * scale, z),
                     shape: Shape::Sphere {
                         r: if is_conifer { 2.3 } else { 3.0 } * scale,
                     },
@@ -1219,7 +1218,6 @@ fn spawn_world(
                     tree: true,
                 });
                 commands.entity(e).insert(Tree {
-                    obstacle: trunk,
                     fall: None,
                 });
                 features.trees.push(p);

@@ -122,6 +122,7 @@ pub struct Human {
 /// Everything one player's HUD needs; built on the host and sent to that player.
 #[derive(Clone, Default, Debug)]
 pub struct PrivateState {
+    pub soldier_id: u32,
     pub alive: bool,
     pub hp: f32,
     pub stamina: f32,
@@ -152,8 +153,10 @@ pub struct PrivateState {
     pub vehicle_ammo: u32,
     pub vehicle_mags: u32,
     pub vehicle_reloading: bool,
+    pub squad_name: String,
     pub order: String,
-    pub squad: Vec<(String, u8, bool)>,
+    /// Name, role, alive, replication id.
+    pub squad: Vec<(String, u8, bool, u32)>,
 }
 
 /// The local player's state (from the host's world, or from the network on clients).
@@ -340,7 +343,7 @@ fn spawn_cameras(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut m
     let root = commands
         .spawn((ViewModel, Transform::default(), Visibility::default()))
         .id();
-    let mut piece = |commands: &mut Commands,
+    let piece = |commands: &mut Commands,
                      gun: ViewGun,
                      mesh: &Handle<Mesh>,
                      mat: &Handle<StandardMaterial>,
@@ -525,7 +528,7 @@ fn respawn_humans(
     assets: Res<SoldierAssets>,
     terrain: Res<Terrain>,
     soldiers: Query<&Health, With<Soldier>>,
-    mut squads: Query<&mut Squad>,
+    squads: Query<&Squad>,
     mut radio: MessageWriter<Radio>,
 ) {
     let dt = time.delta_secs();
@@ -635,7 +638,7 @@ fn respawn_humans(
 }
 
 #[allow(clippy::type_complexity)]
-fn apply_human_inputs(
+pub fn apply_human_inputs(
     mut humans: ResMut<Humans>,
     mut soldiers: Query<(&mut Soldier, &Loadout, &Health, &Transform)>,
     mut vehicles: Query<&mut Vehicle>,
@@ -712,6 +715,7 @@ fn apply_human_inputs(
         if dir.length_squared() > 1.0 {
             dir = dir.normalize();
         }
+        let stance = s.stance;
         let intent = &mut s.intent;
         intent.move_dir = dir;
         intent.sprint = inp.sprint;
@@ -735,14 +739,14 @@ fn apply_human_inputs(
             intent.switch_to = Some((loadout.active + 1) % loadout.weapons.len());
         }
         if pressed[E_CROUCH] {
-            intent.stance = Some(if s.stance == Stance::Crouch {
+            intent.stance = Some(if stance == Stance::Crouch {
                 Stance::Stand
             } else {
                 Stance::Crouch
             });
         }
         if pressed[E_PRONE] {
-            intent.stance = Some(if s.stance == Stance::Prone {
+            intent.stance = Some(if stance == Stance::Prone {
                 Stance::Stand
             } else {
                 Stance::Prone
@@ -803,12 +807,13 @@ pub fn private_state(
         ..default()
     };
     if let Some(sq) = slot.squad.and_then(|s| squads.get(s).ok()) {
+        st.squad_name.clone_from(&sq.name);
         st.order = sq.order.label().to_string();
         st.squad = sq
             .members
             .iter()
             .filter_map(|&m| soldiers.get(m).ok())
-            .map(|(s, _, h, _)| (s.name.clone(), s.role as u8, !h.dead))
+            .map(|(s, _, h, _)| (s.name.clone(), s.role as u8, !h.dead, 0))
             .collect();
     }
     let Some((s, l, h, _)) = slot.soldier.and_then(|e| soldiers.get(e).ok()) else {

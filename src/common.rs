@@ -83,6 +83,7 @@ pub struct Damage {
 pub struct Killed {
     pub victim: Entity,
     pub attacker: Option<Entity>,
+    pub headshot: bool,
 }
 
 /// A line in the radio / kill feed.

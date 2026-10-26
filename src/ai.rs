@@ -158,15 +158,9 @@ impl Plugin for AiPlugin {
                 (build_targets, squad_update, hearing, soldier_ai)
                     .chain()
                     .in_set(Phase::Ai)
-                    .before(crate::vehicle::VehiclePlugin::ai_label())
+                    .before(crate::vehicle::handle_enter_exit)
                     .run_if(is_authority),
             );
-    }
-}
-
-impl crate::vehicle::VehiclePlugin {
-    pub fn ai_label() -> impl SystemSet {
-        Phase::Movement
     }
 }
 
@@ -182,7 +176,7 @@ pub fn ballistic_aim(from: Vec3, target: Vec3, vel: Vec3, kind: WeaponKind) -> V
     target + vel * t + Vec3::Y * (0.5 * GRAVITY * st.gravity * t * t)
 }
 
-fn build_targets(
+pub fn build_targets(
     mut targets: ResMut<Targets>,
     soldiers: Query<(Entity, &Soldier, &Transform, &Health)>,
     vehicles: Query<(Entity, &Vehicle, &Transform, &Health)>,
@@ -351,7 +345,7 @@ fn soldier_ai(
 ) {
     let dt = time.delta_secs();
     let mut info: HashMap<Entity, Info> = HashMap::new();
-    for (e, s, tf, h, ..) in soldiers.iter() {
+    for (e, s, _, tf, h, _) in soldiers.iter() {
         info.insert(
             e,
             Info {
@@ -540,9 +534,10 @@ fn soldier_ai(
             intent.ads = true;
             if brain.stance_timer <= 0.0 {
                 brain.stance_timer = 2.0 + fastrand::f32() * 3.0;
-                let st = if s.suppression > 0.5 || (s.role == Role::Autorifleman && d > 80.0) {
-                    Stance::Prone
-                } else if d > 220.0 && fastrand::f32() < 0.5 {
+                let st = if s.suppression > 0.5
+                    || (s.role == Role::Autorifleman && d > 80.0)
+                    || (d > 220.0 && fastrand::f32() < 0.5)
+                {
                     Stance::Prone
                 } else {
                     Stance::Crouch

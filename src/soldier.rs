@@ -295,18 +295,11 @@ impl Plugin for SoldierPlugin {
                 Update,
                 (soldier_death, corpse_cleanup)
                     .chain()
-                    .after(crate::combat::CombatPlugin::damage_label())
+                    .after(crate::combat::apply_damage)
                     .in_set(Phase::Damage)
                     .run_if(is_authority),
             )
             .add_systems(Update, animate_soldiers.in_set(Phase::Camera));
-    }
-}
-
-impl crate::combat::CombatPlugin {
-    /// Damage is applied by systems in `Phase::Damage`; ordering inside the set is by chain.
-    pub fn damage_label() -> impl SystemSet {
-        Phase::Movement
     }
 }
 
@@ -768,6 +761,7 @@ fn soldier_death(
         s.healing = 0.0;
         let text = match &killer {
             Some((k, kf)) if *kf == s.faction => format!("{} was killed by {} (friendly fire)", s.name, k),
+            Some((k, _)) if ev.headshot => format!("{} killed {} (headshot)", k, s.name),
             Some((k, _)) => format!("{} killed {}", k, s.name),
             None => format!("{} was killed", s.name),
         };
