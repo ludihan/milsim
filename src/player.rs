@@ -304,6 +304,8 @@ fn spawn_cameras(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut m
             Camera3d::default(),
             Camera {
                 order: 1,
+                // Draw the weapon over the world image instead of clearing it.
+                clear_color: ClearColorConfig::None,
                 ..default()
             },
             Projection::from(PerspectiveProjection {

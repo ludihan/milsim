@@ -4,6 +4,9 @@
 //!   milsim                         single player
 //!   milsim host [port]             host a co-op session (default port 27015)
 //!   milsim join <ip[:port]> [name] join a co-op session
+//!
+//! Add `--quality low|medium|high` to override the automatic graphics preset (F9 cycles it) and
+//! `--render-scale <0.25..2.0>` to render the 3D scene at a fraction of the window resolution.
 
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
@@ -17,6 +20,7 @@ mod mission;
 mod models;
 mod net;
 mod player;
+mod quality;
 mod soldier;
 mod terrain;
 mod vehicle;
@@ -29,8 +33,25 @@ use bevy::{prelude::*, window::PresentMode};
 use common::{Phase, SKY_COLOR};
 use net::{DEFAULT_PORT, NetMode};
 
-fn parse_args() -> Result<NetMode, String> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+fn parse_args() -> Result<(NetMode, quality::QualityOverride), String> {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let mut forced = quality::QualityOverride::default();
+    if let Some(i) = args.iter().position(|a| a == "--quality") {
+        let level = args.get(i + 1).ok_or("usage: --quality low|medium|high")?;
+        forced.quality = Some(
+            quality::Quality::parse(level).ok_or_else(|| format!("unknown quality `{level}`"))?,
+        );
+        args.drain(i..i + 2);
+    }
+    if let Some(i) = args.iter().position(|a| a == "--render-scale") {
+        let v = args.get(i + 1).ok_or("usage: --render-scale <0.25..2.0>")?;
+        forced.render_scale = Some(v.parse().map_err(|_| format!("invalid render scale `{v}`"))?);
+        args.drain(i..i + 2);
+    }
+    parse_mode(&args).map(|m| (m, forced))
+}
+
+fn parse_mode(args: &[String]) -> Result<NetMode, String> {
     match args.first().map(String::as_str) {
         None => Ok(NetMode::Single),
         Some("host") => {
@@ -63,13 +84,13 @@ fn parse_args() -> Result<NetMode, String> {
             NetMode::join(addr, name).map_err(|e| format!("cannot open socket: {e}"))
         }
         Some(other) => Err(format!(
-            "unknown command `{other}`\nusage: milsim [host [port] | join <ip[:port]> [name]]"
+            "unknown command `{other}`\nusage: milsim [host [port] | join <ip[:port]> [name]] [--quality low|medium|high] [--render-scale N]"
         )),
     }
 }
 
 fn main() {
-    let mode = match parse_args() {
+    let (mode, forced_quality) = match parse_args() {
         Ok(m) => m,
         Err(e) => {
             eprintln!("{e}");
@@ -83,7 +104,12 @@ fn main() {
         primary_window: Some(Window {
             title: "Operation Iron Ridge".into(),
             resolution: (1600, 900).into(),
-            present_mode: PresentMode::AutoVsync,
+            // The screenshot tour measures frame rate, so it runs uncapped.
+            present_mode: if std::env::var_os("MILSIM_TOUR").is_some() {
+                PresentMode::AutoNoVsync
+            } else {
+                PresentMode::AutoVsync
+            },
             ..default()
         }),
         ..default()
@@ -95,6 +121,7 @@ fn main() {
         ..default()
     })
     .insert_resource(mode)
+    .insert_resource(forced_quality)
     .insert_resource(terrain::Terrain::generate())
     .configure_sets(
         Update,
@@ -120,6 +147,7 @@ fn main() {
         net::NetPlugin,
         mission::MissionPlugin,
         hud::HudPlugin,
+        quality::QualityPlugin,
         devtools::DevToolsPlugin,
     ));
     if !is_client {
