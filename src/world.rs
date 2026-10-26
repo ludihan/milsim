@@ -371,7 +371,13 @@ pub fn colored(mut mesh: Mesh, color: Color) -> Mesh {
 }
 
 pub fn merged(parts: Vec<Mesh>) -> Mesh {
-    let mut it = parts.into_iter();
+    // `merge` only joins index buffers when both sides have one, so de-index everything.
+    let mut it = parts.into_iter().map(|mut m| {
+        if m.indices().is_some() {
+            m.duplicate_vertices();
+        }
+        m
+    });
     let mut m = it.next().expect("at least one mesh");
     for p in it {
         m.merge(&p).expect("compatible meshes");
@@ -433,16 +439,15 @@ pub fn prism_mesh() -> Mesh {
     .with_inserted_indices(Indices::U32(indices))
 }
 
-fn ico(r: f32, sub: u32) -> Mesh {
-    Sphere::new(r).mesh().ico(sub).expect("valid icosphere")
-}
-
 // ---------------------------------------------------------------------------
 // World generation
 // ---------------------------------------------------------------------------
 
 struct Props {
     cube: Handle<Mesh>,
+    soft: Handle<Mesh>,
+    trim: Handle<StandardMaterial>,
+    plinth: Handle<StandardMaterial>,
     prism: Handle<Mesh>,
     windows: Handle<StandardMaterial>,
     door: Handle<StandardMaterial>,
@@ -477,8 +482,13 @@ fn spawn_box(
     yaw: f32,
     mask: u8,
 ) {
+    let soft = material == &props.sandbag || material == &props.hesco;
     commands.spawn((
-        Mesh3d(props.cube.clone()),
+        Mesh3d(if soft {
+            props.soft.clone()
+        } else {
+            props.cube.clone()
+        }),
         MeshMaterial3d(material.clone()),
         Transform {
             translation: center,
@@ -546,9 +556,31 @@ fn spawn_house(
         yaw,
         SOLID,
     );
+    spawn_box(
+        commands,
+        obstacles,
+        props,
+        &props.plinth,
+        Vec3::new(center.x, (base + floor0) * 0.5 + 0.1, center.y),
+        Vec3::new(w + 0.12, floor0 - base + 0.2, d + 0.12),
+        yaw,
+        0,
+    );
     let pitched = rng.f32() < 0.72;
     if pitched {
         let roof_h = (w * 0.38).min(3.5);
+        let side = if rng.bool() { 1.0 } else { -1.0 };
+        let cp = rot * Vec3::new(w * 0.22 * side, 0.0, d * (rng.f32() - 0.5) * 0.6);
+        spawn_box(
+            commands,
+            obstacles,
+            props,
+            &props.plinth,
+            Vec3::new(center.x + cp.x, top + roof_h * 0.6, center.y + cp.z),
+            Vec3::new(0.55, roof_h * 0.9 + 0.8, 0.55),
+            yaw,
+            0,
+        );
         let roof_mat = &props.roofs[rng.usize(..props.roofs.len())];
         commands.spawn((
             Mesh3d(props.prism.clone()),
@@ -610,20 +642,46 @@ fn spawn_house(
                 };
                 let (h, yy) = if is_door { (2.1, floor0 + 1.05) } else { (1.2, y) };
                 let p = rot * local;
-                commands.spawn((
-                    Mesh3d(props.cube.clone()),
-                    MeshMaterial3d(if is_door {
-                        props.door.clone()
+                let outward = rot * if axis_x {
+                    Vec3::new(0.0, 0.0, out.signum())
+                } else {
+                    Vec3::new(out.signum(), 0.0, 0.0)
+                };
+                let widen = |v: Vec3, extra: f32| {
+                    if axis_x {
+                        Vec3::new(v.x + extra, v.y, v.z)
                     } else {
-                        props.windows.clone()
-                    }),
-                    Transform {
-                        translation: Vec3::new(center.x + p.x, yy, center.y + p.z),
-                        rotation: rot,
-                        scale: Vec3::new(size.x, h, size.z),
-                    },
-                    NotShadowCaster,
-                ));
+                        Vec3::new(v.x, v.y, v.z + extra)
+                    }
+                };
+                let c = Vec3::new(center.x + p.x, yy, center.y + p.z);
+                let mut piece = |m: &Handle<StandardMaterial>, at: Vec3, scale: Vec3| {
+                    commands.spawn((
+                        Mesh3d(props.cube.clone()),
+                        MeshMaterial3d(m.clone()),
+                        Transform {
+                            translation: at,
+                            rotation: rot,
+                            scale,
+                        },
+                        NotShadowCaster,
+                    ));
+                };
+                let pane = Vec3::new(size.x, h, size.z);
+                piece(&props.trim, c - outward * 0.01, widen(pane, 0.22) + Vec3::Y * 0.2);
+                piece(
+                    if is_door { &props.door } else { &props.windows },
+                    c + outward * 0.02,
+                    pane,
+                );
+                if !is_door {
+                    piece(
+                        &props.trim,
+                        c + outward * 0.08 - Vec3::Y * (h * 0.5 + 0.08),
+                        widen(Vec3::new(size.x.min(0.2), 0.07, size.z.min(0.2)), 1.2)
+                            + if axis_x { Vec3::new(0.0, 0.0, 0.12) } else { Vec3::new(0.12, 0.0, 0.0) },
+                    );
+                }
             }
         }
     }
@@ -1058,6 +1116,9 @@ fn spawn_world(
 
     let props = Props {
         cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+        soft: meshes.add(crate::models::rounded_box(Vec3::ONE, 0.22)),
+        trim: mat(&mut materials, Color::srgb(0.9, 0.88, 0.82), 0.7),
+        plinth: mat(&mut materials, Color::srgb(0.42, 0.4, 0.37), 0.95),
         prism: meshes.add(prism_mesh()),
         windows: materials.add(StandardMaterial {
             base_color: Color::srgb(0.08, 0.1, 0.12),
@@ -1109,36 +1170,72 @@ fn spawn_world(
     }
 
     // Vegetation: vertex-coloured merged meshes so each plant is a single entity.
-    let bark = Color::srgb(0.3, 0.22, 0.15);
-    let pine = Color::srgb(0.12, 0.24, 0.12);
-    let leaf = Color::srgb(0.24, 0.36, 0.15);
-    let conifer = meshes.add(merged(vec![
-        colored(
-            Cylinder::new(0.22, 3.0).mesh().resolution(6).build(),
-            bark,
-        )
-        .translated_by(Vec3::Y * 1.5),
-        colored(Cone::new(2.3, 5.0).mesh().resolution(8).build(), pine)
-            .translated_by(Vec3::Y * 4.6),
-        colored(Cone::new(1.7, 4.0).mesh().resolution(8).build(), pine)
-            .translated_by(Vec3::Y * 7.2),
-    ]));
-    let broadleaf = meshes.add(merged(vec![
-        colored(
-            Cylinder::new(0.28, 4.0).mesh().resolution(6).build(),
-            bark,
-        )
-        .translated_by(Vec3::Y * 2.0),
-        colored(ico(2.7, 1), leaf).translated_by(Vec3::new(0.0, 5.4, 0.0)),
-        colored(ico(2.0, 1), leaf).translated_by(Vec3::new(1.3, 4.6, 0.6)),
-        colored(ico(1.9, 1), leaf).translated_by(Vec3::new(-1.1, 4.9, -0.8)),
-    ]));
-    let bush = meshes.add(
-        colored(ico(1.2, 1), Color::srgb(0.22, 0.32, 0.14))
-            .scaled_by(Vec3::new(1.3, 0.8, 1.3))
-            .translated_by(Vec3::Y * 0.6),
-    );
-    let rock = meshes.add(colored(ico(1.0, 1), Color::srgb(0.48, 0.47, 0.45)));
+    use crate::models::{limb, lumpy, tapered};
+    let bark = Color::srgb(0.28, 0.21, 0.15);
+    let conifer_mesh = |seed: u32, dark: f32| {
+        let pine = |k: f32| Color::srgb(0.1 * k, 0.22 * k, 0.11 * k);
+        let mut parts = vec![colored(tapered(0.26, 0.08, 9.0, 8), bark).translated_by(Vec3::Y * 4.5)];
+        let tiers = [(2.5, 2.8, 2.6), (2.1, 2.6, 3.9), (1.7, 2.4, 5.1), (1.25, 2.2, 6.2), (0.75, 1.9, 7.3)];
+        for (i, (r, h, y)) in tiers.into_iter().enumerate() {
+            let k = dark * (0.9 + 0.08 * ((i as u32 + seed) % 3) as f32);
+            let cone = Cone::new(r, h).mesh().resolution(11).build();
+            parts.push(
+                colored(cone, pine(k))
+                    .rotated_by(Quat::from_rotation_y(i as f32 * 0.7 + seed as f32))
+                    .translated_by(Vec3::Y * y),
+            );
+        }
+        merged(parts)
+    };
+    let broadleaf_mesh = |seed: u32| {
+        let leaf = |k: f32| Color::srgb(0.22 * k, 0.34 * k, 0.14 * k);
+        let mut parts = vec![colored(tapered(0.32, 0.16, 4.6, 8), bark).translated_by(Vec3::Y * 2.3)];
+        for (a, b) in [
+            (Vec3::new(0.0, 3.2, 0.0), Vec3::new(1.3, 4.6, 0.4)),
+            (Vec3::new(0.0, 3.6, 0.0), Vec3::new(-1.1, 4.9, -0.6)),
+        ] {
+            let (m, t) = limb(0.1, a, b);
+            parts.push(colored(m.transformed_by(t), bark));
+        }
+        let clumps = [
+            (Vec3::new(0.0, 5.6, 0.0), 2.3),
+            (Vec3::new(1.4, 4.9, 0.5), 1.7),
+            (Vec3::new(-1.3, 5.0, -0.7), 1.7),
+            (Vec3::new(0.4, 4.6, -1.3), 1.5),
+            (Vec3::new(-0.5, 4.5, 1.3), 1.5),
+            (Vec3::new(0.2, 6.7, 0.3), 1.4),
+        ];
+        for (i, (c, r)) in clumps.into_iter().enumerate() {
+            let k = 0.85 + 0.1 * ((i as u32 * 7 + seed) % 4) as f32;
+            parts.push(colored(lumpy(r, 0.18, 2, seed * 13 + i as u32), leaf(k)).translated_by(c));
+        }
+        merged(parts)
+    };
+    let conifers = [
+        meshes.add(conifer_mesh(1, 1.0)),
+        meshes.add(conifer_mesh(2, 0.85)),
+    ];
+    let broadleaves = [meshes.add(broadleaf_mesh(1)), meshes.add(broadleaf_mesh(2))];
+    let bush = meshes.add(merged(
+        [
+            (Vec3::new(0.0, 0.6, 0.0), 0.9),
+            (Vec3::new(0.7, 0.45, 0.3), 0.65),
+            (Vec3::new(-0.6, 0.5, -0.2), 0.7),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(i, (c, r))| {
+            colored(lumpy(r, 0.2, 1, 40 + i as u32), Color::srgb(0.2, 0.3 + i as f32 * 0.03, 0.13))
+                .translated_by(c)
+        })
+        .collect(),
+    ));
+    let rocks = [0u32, 1, 2].map(|seed| {
+        meshes.add(colored(
+            lumpy(1.0, 0.28, 2, 90 + seed),
+            Color::srgb(0.47 + seed as f32 * 0.02, 0.46, 0.44),
+        ))
+    });
     let veg_mat = materials.add(StandardMaterial {
         base_color: Color::WHITE,
         perceptual_roughness: 0.95,
@@ -1183,9 +1280,9 @@ fn spawn_world(
                 let e = commands
                     .spawn((
                         Mesh3d(if is_conifer {
-                            conifer.clone()
+                            conifers[(kind_roll * 1000.0) as usize % 2].clone()
                         } else {
-                            broadleaf.clone()
+                            broadleaves[(kind_roll * 1000.0) as usize % 2].clone()
                         }),
                         MeshMaterial3d(veg_mat.clone()),
                         Transform {
@@ -1243,7 +1340,7 @@ fn spawn_world(
             } else {
                 let s = Vec3::new(1.0 + rng.f32() * 1.5, 0.6 + rng.f32(), 1.0 + rng.f32() * 1.5);
                 commands.spawn((
-                    Mesh3d(rock.clone()),
+                    Mesh3d(rocks[(roll * 1e4) as usize % 3].clone()),
                     MeshMaterial3d(veg_mat.clone()),
                     Transform {
                         translation: Vec3::new(x, h, z),
