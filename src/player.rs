@@ -329,14 +329,13 @@ fn spawn_cameras(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut m
     let tan = m(Color::srgb(0.55, 0.48, 0.36), 0.8, 0.0);
     let olive = m(Color::srgb(0.3, 0.33, 0.22), 0.7, 0.0);
     let glove = m(Color::srgb(0.22, 0.2, 0.17), 0.9, 0.0);
+    let sleeve = m(Color::srgb(0.5, 0.45, 0.34), 0.95, 0.0);
     let dot = materials.add(StandardMaterial {
         base_color: Color::srgb(1.0, 0.1, 0.05),
         emissive: LinearRgba::rgb(40.0, 1.0, 0.5),
         unlit: true,
         ..default()
     });
-    let cube = meshes.add(Cuboid::new(1.0, 1.0, 1.0));
-    let cyl = meshes.add(Cylinder::new(1.0, 1.0));
     let ring = meshes.add(Torus::new(0.016, 0.02));
     let dot_mesh = meshes.add(Sphere::new(0.0016));
     let layer = RenderLayers::layer(VIEW_LAYER);
@@ -345,20 +344,14 @@ fn spawn_cameras(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut m
         .id();
     let piece = |commands: &mut Commands,
                      gun: ViewGun,
-                     mesh: &Handle<Mesh>,
+                     mesh: Handle<Mesh>,
                      mat: &Handle<StandardMaterial>,
-                     pos: Vec3,
-                     scale: Vec3,
-                     rot: Quat| {
+                     at: Transform| {
         let e = commands
             .spawn((
-                Mesh3d(mesh.clone()),
+                Mesh3d(mesh),
                 MeshMaterial3d(mat.clone()),
-                Transform {
-                    translation: pos,
-                    rotation: rot,
-                    scale,
-                },
+                at,
                 ViewModelPart(gun),
                 layer.clone(),
                 NotShadowCaster,
@@ -366,30 +359,72 @@ fn spawn_cameras(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut m
             .id();
         commands.entity(root).add_child(e);
     };
+    use crate::models::{cylinder, limb, rounded_box};
+    let rb = |meshes: &mut Assets<Mesh>, x: f32, y: f32, z: f32, r: f32| {
+        meshes.add(rounded_box(Vec3::new(x, y, z), r))
+    };
+    let at = |x: f32, y: f32, z: f32| Transform::from_xyz(x, y, z);
     let along_z = Quat::from_rotation_x(FRAC_PI_2);
     let ring_rot = Quat::from_rotation_x(FRAC_PI_2);
     // The sight line is the model's Z axis at y = 0; the bore sits below it.
-    for (gun, body, len) in [(ViewGun::Rifle, &black, 0.62), (ViewGun::Mg, &black, 0.75)] {
-        piece(&mut commands, gun, &cube, body, Vec3::new(0.0, -0.075, 0.05), Vec3::new(0.05, 0.07, 0.42), Quat::IDENTITY);
-        piece(&mut commands, gun, &cube, &tan, Vec3::new(0.0, -0.08, -0.25), Vec3::new(0.06, 0.06, 0.25), Quat::IDENTITY);
-        piece(&mut commands, gun, &cyl, body, Vec3::new(0.0, -0.07, -len * 0.5 - 0.2), Vec3::new(0.012, len, 0.012), along_z);
-        piece(&mut commands, gun, &cube, body, Vec3::new(0.0, -0.06, 0.3), Vec3::new(0.045, 0.09, 0.2), Quat::IDENTITY);
-        piece(&mut commands, gun, &cube, &glove, Vec3::new(0.0, -0.15, 0.12), Vec3::new(0.05, 0.1, 0.05), Quat::from_rotation_x(0.3));
-        piece(&mut commands, gun, &cube, &glove, Vec3::new(-0.02, -0.12, -0.22), Vec3::new(0.06, 0.05, 0.12), Quat::IDENTITY);
-        piece(&mut commands, gun, &ring, body, Vec3::new(0.0, 0.0, -0.02), Vec3::ONE, ring_rot);
-        piece(&mut commands, gun, &ring, body, Vec3::new(0.0, 0.0, -0.1), Vec3::ONE, ring_rot);
-        piece(&mut commands, gun, &cube, body, Vec3::new(0.0, -0.03, -0.06), Vec3::new(0.02, 0.025, 0.1), Quat::IDENTITY);
-        piece(&mut commands, gun, &dot_mesh, &dot, Vec3::new(0.0, 0.0, -0.1), Vec3::ONE, Quat::IDENTITY);
-        if gun == ViewGun::Mg {
-            piece(&mut commands, gun, &cube, &olive, Vec3::new(0.0, -0.15, -0.05), Vec3::new(0.09, 0.1, 0.12), Quat::IDENTITY);
-        } else {
-            piece(&mut commands, gun, &cube, body, Vec3::new(0.0, -0.15, -0.03), Vec3::new(0.035, 0.12, 0.05), Quat::from_rotation_x(-0.2));
+    for gun in [ViewGun::Rifle, ViewGun::Mg] {
+        let mg = gun == ViewGun::Mg;
+        let guard_len = if mg { 0.4 } else { 0.3 };
+        let parts: Vec<(Handle<Mesh>, &Handle<StandardMaterial>, Transform)> = vec![
+            (rb(&mut meshes, 0.05, 0.055, 0.26, 0.012), &black, at(0.0, -0.065, 0.02)),
+            (rb(&mut meshes, 0.044, 0.05, 0.16, 0.01), &black, at(0.0, -0.105, -0.02)),
+            (rb(&mut meshes, 0.056, 0.06, guard_len, 0.02), &tan, at(0.0, -0.068, -0.11 - guard_len * 0.5)),
+            (meshes.add(cylinder(0.009, 0.26, 12)), &black, at(0.0, -0.068, -0.24 - guard_len).with_rotation(along_z)),
+            (meshes.add(cylinder(0.014, 0.05, 12)), &black, at(0.0, -0.068, -0.38 - guard_len).with_rotation(along_z)),
+            (rb(&mut meshes, 0.026, 0.032, 0.09, 0.006), &black, at(0.0, -0.03, -0.06)),
+            (ring.clone(), &black, at(0.0, 0.0, -0.02).with_rotation(ring_rot)),
+            (ring.clone(), &black, at(0.0, 0.0, -0.1).with_rotation(ring_rot)),
+            (dot_mesh.clone(), &dot, at(0.0, 0.0, -0.1)),
+            (rb(&mut meshes, 0.03, 0.09, 0.045, 0.01), &black, at(0.0, -0.15, 0.12).with_rotation(Quat::from_rotation_x(-0.35))),
+            (rb(&mut meshes, 0.045, 0.085, 0.2, 0.02), &black, at(0.0, -0.08, 0.3)),
+            if mg {
+                (rb(&mut meshes, 0.09, 0.1, 0.12, 0.02), &olive, at(0.0, -0.15, -0.03))
+            } else {
+                (rb(&mut meshes, 0.03, 0.15, 0.065, 0.01), &black, at(0.0, -0.18, -0.03).with_rotation(Quat::from_rotation_x(0.18)))
+            },
+        ];
+        for (mesh, mat, t) in parts {
+            piece(&mut commands, gun, mesh, mat, t);
         }
     }
-    piece(&mut commands, ViewGun::Launcher, &cyl, &olive, Vec3::new(0.0, -0.08, -0.15), Vec3::new(0.05, 1.0, 0.05), along_z);
-    piece(&mut commands, ViewGun::Launcher, &ring, &black, Vec3::new(0.0, 0.0, -0.12), Vec3::ONE, ring_rot);
-    piece(&mut commands, ViewGun::Launcher, &dot_mesh, &dot, Vec3::new(0.0, 0.0, -0.12), Vec3::ONE, Quat::IDENTITY);
-    piece(&mut commands, ViewGun::Launcher, &cube, &glove, Vec3::new(0.0, -0.17, 0.0), Vec3::new(0.05, 0.1, 0.05), Quat::IDENTITY);
+    // Hands and forearms for every weapon.
+    for (gun, left_hand) in [
+        (ViewGun::Rifle, Vec3::new(-0.01, -0.1, -0.3)),
+        (ViewGun::Mg, Vec3::new(-0.01, -0.1, -0.36)),
+        (ViewGun::Launcher, Vec3::new(-0.02, -0.13, -0.35)),
+    ] {
+        let right_hand = Vec3::new(0.0, -0.15, 0.11);
+        for (hand, elbow) in [
+            (right_hand, Vec3::new(0.1, -0.33, 0.38)),
+            (left_hand, Vec3::new(-0.16, -0.34, -0.02)),
+        ] {
+            let (fore, t) = limb(0.035, hand, elbow);
+            piece(&mut commands, gun, meshes.add(fore), &sleeve, t);
+            piece(
+                &mut commands,
+                gun,
+                meshes.add(Sphere::new(0.034).mesh().uv(12, 8)),
+                &glove,
+                Transform::from_translation(hand).with_scale(Vec3::new(1.0, 1.1, 1.4)),
+            );
+        }
+    }
+    let launcher_parts = vec![
+        (meshes.add(cylinder(0.045, 1.0, 20)), &olive, at(0.0, -0.075, -0.15).with_rotation(along_z)),
+        (meshes.add(cylinder(0.052, 0.06, 20)), &olive, at(0.0, -0.075, -0.64).with_rotation(along_z)),
+        (rb(&mut meshes, 0.025, 0.04, 0.05, 0.008), &black, at(0.0, -0.03, -0.12)),
+        (ring.clone(), &black, at(0.0, 0.0, -0.12).with_rotation(ring_rot)),
+        (dot_mesh.clone(), &dot, at(0.0, 0.0, -0.12)),
+        (rb(&mut meshes, 0.03, 0.09, 0.045, 0.01), &black, at(0.0, -0.15, 0.12)),
+    ];
+    for (mesh, mat, t) in launcher_parts {
+        piece(&mut commands, ViewGun::Launcher, mesh, mat, t);
+    }
     commands.entity(cam).add_children(&[view_cam, root]);
 }
 
