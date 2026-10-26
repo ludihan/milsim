@@ -10,10 +10,11 @@
 mod ai;
 mod audio;
 mod combat;
-mod devtools;
 mod common;
+mod devtools;
 mod hud;
 mod mission;
+mod models;
 mod net;
 mod player;
 mod soldier;
