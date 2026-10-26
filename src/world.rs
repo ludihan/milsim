@@ -281,6 +281,10 @@ pub fn line_of_sight(terrain: &Terrain, obstacles: &Obstacles, a: Vec3, b: Vec3)
     terrain.raycast(a, b).is_none() && !obstacles.segment_blocked(a, b, SIGHT)
 }
 
+/// Present only while a tree is toppling, so idle trees cost nothing per frame.
+#[derive(Component)]
+pub struct Falling;
+
 #[derive(Component)]
 pub struct Tree {
     pub fall: Option<(Vec3, f32)>,
@@ -313,6 +317,7 @@ impl Plugin for WorldPlugin {
 }
 
 fn apply_tree_falls(
+    mut commands: Commands,
     mut events: MessageReader<TreeFell>,
     mut obstacles: ResMut<Obstacles>,
     mut trees: Query<&mut Tree>,
@@ -340,14 +345,20 @@ fn apply_tree_falls(
             // Rotating around this axis tips the top of the tree toward `dir`.
             let axis = Vec3::new(-dir.y, 0.0, dir.x);
             tree.fall = Some((axis, 0.0));
+            commands.entity(e).insert(Falling);
         }
     }
 }
 
-fn animate_tree_falls(time: Res<Time>, mut trees: Query<(&mut Tree, &mut Transform)>) {
-    for (mut tree, mut tf) in &mut trees {
+fn animate_tree_falls(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut trees: Query<(Entity, &mut Tree, &mut Transform), With<Falling>>,
+) {
+    for (e, mut tree, mut tf) in &mut trees {
         if let Some((axis, angle)) = tree.fall.as_mut() {
             if *angle >= FRAC_PI_2 - 0.05 {
+                commands.entity(e).remove::<Falling>();
                 continue;
             }
             let step = (0.3 + *angle * 2.5) * time.delta_secs();
