@@ -68,6 +68,29 @@ library path, so start it through `cargo dev` rather than running `target/debug/
 Dependencies are compiled with full optimizations even in debug builds, so the game is playable
 while you iterate. The first build takes a while.
 
+## Graphics quality and weak computers
+
+The game picks a graphics preset from your GPU at startup. Integrated and software renderers get
+**Low**; dedicated GPUs get **High**. Press **F9** in game to cycle presets, or choose one on the
+command line:
+
+```sh
+cargo run --release -- --quality low          # low | medium | high
+cargo run --release -- --render-scale 0.5     # render the 3D scene at 50% resolution
+```
+
+| | Low | Medium | High |
+| --- | --- | --- | --- |
+| 3D render resolution | 60% | 80% | 100% |
+| Anti-aliasing | none | FXAA | 4× MSAA |
+| Shadows | off | one cascade, 70 m | three cascades, 220 m |
+| View distance | 900 m | 1.4 km | 1.9 km |
+| Tree draw distance | 500 m | 900 m | 1.5 km |
+
+The HUD always renders at full resolution. On an Intel UHD 620 laptop (i5-10210U) the game runs
+at about 60 fps on Low (the display's refresh cap), 38 fps on Medium and 16 fps on High. On very weak
+GPUs, lower `--render-scale` further (down to 0.25).
+
 ## Multiplayer
 
 ```sh
@@ -104,6 +127,7 @@ no prediction, so a low-latency connection gives the best feel.
 | `F` | Get in / out of the nearest vehicle |
 | `V` | First / third person |
 | `M` | Map (also lists the controls) |
+| `F9` | Cycle graphics quality |
 | `F1` / `F2` / `F3` | Squad: form on me / hold / move to crosshair |
 | `Enter` | Redeploy after death (`1` to `4` picks a role first) |
 | `Esc` / click | Release / capture the mouse |
@@ -144,6 +168,7 @@ when you get out.
 | `net.rs` | UDP protocol, replication, interpolation |
 | `hud.rs` | HUD and tactical map |
 | `audio.rs` | Sound synthesis and playback |
+| `quality.rs` | Graphics presets, render scaling, distance culling |
 | `devtools.rs` | Scripted screenshot tour |
 
 Every frame runs the phases `Input → Ai → Movement → Combat → Damage → Camera → Hud`. Simulation
@@ -153,8 +178,9 @@ replication and presentation.
 ### Screenshot tour
 
 `MILSIM_TOUR=<dir> cargo dev` plays a scripted sequence. It covers first and third person, the map,
-aiming, driving, a town assault and helicopter flight. It saves screenshots to `<dir>`, reports the
-average frame rate and exits. As a client, it only looks around.
+aiming, driving, a town assault and helicopter flight. It saves screenshots to `<dir>`, logs the
+frame rate and main-world CPU time for each segment, and exits. It runs without vsync so the
+numbers reflect real performance. As a client, it only looks around.
 
 ## License
 

@@ -359,7 +359,7 @@ fn setup_hud(
                     Text::new(
                         "WASD move  Shift sprint  C crouch  Z prone  Alt freelook  V 3rd person\n\
                          LMB fire  RMB aim  R reload  B fire mode  1/2/X weapons  G grenade  H first aid\n\
-                         PgUp/PgDn zeroing  F enter/exit vehicle  F1 form on me  F2 hold  F3 move to crosshair\n\
+                         PgUp/PgDn zeroing  F enter/exit vehicle  F1 form on me  F2 hold  F3 move to crosshair  F9 graphics\n\
                          Vehicles: WASD drive, Space brake, mouse aims the gun, X switch weapon\n\
                          Helicopter: Shift/Ctrl collective, W/S pitch, A/D yaw, Q/E roll",
                     ),
