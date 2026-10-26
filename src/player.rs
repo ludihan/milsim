@@ -341,7 +341,7 @@ fn spawn_cameras(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut m
     let dot_mesh = meshes.add(Sphere::new(0.0016));
     let layer = RenderLayers::layer(VIEW_LAYER);
     let root = commands
-        .spawn((ViewModel, Transform::default(), Visibility::default()))
+        .spawn((ViewModel, Transform::from_scale(Vec3::splat(0.8)), Visibility::default()))
         .id();
     let piece = |commands: &mut Commands,
                      gun: ViewGun,
@@ -1080,7 +1080,7 @@ fn update_view_model(
     let bob = if moving { (t * 9.0).sin() * 0.008 } else { 0.0 };
     let sway = Vec3::new((t * 0.9).sin() * 0.002, (t * 1.3).sin() * 0.0015, 0.0)
         * if view.ads > 0.5 { 0.6 } else { 1.0 };
-    let hip = Vec3::new(0.14, -0.13, -0.32);
+    let hip = Vec3::new(0.13, -0.12, -0.3);
     let ads = Vec3::new(0.0, 0.0, -0.17);
     let mut pos = hip.lerp(ads, view.ads) + sway + Vec3::new(bob * 0.5, bob.abs(), 0.0);
     let mut rot = Quat::IDENTITY;
