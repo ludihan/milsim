@@ -154,6 +154,13 @@ fn tour(
     if *climbing {
         input.0.up = true;
     }
+    // `MILSIM_TOUR_UNTIL=<seconds>` ends the tour early (e.g. to keep profiling traces small).
+    if let Some(until) = std::env::var("MILSIM_TOUR_UNTIL").ok().and_then(|v| v.parse::<f32>().ok())
+        && tour.time > until
+    {
+        exit.write(AppExit::Success);
+        return;
+    }
     while let Some(&(at, act)) = script.get(tour.step) {
         if tour.time < at {
             break;
