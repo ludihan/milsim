@@ -362,7 +362,10 @@ pub fn random_name(faction: Faction, role: Role) -> String {
         Faction::Blufor => BLUFOR_NAMES,
         Faction::Opfor => OPFOR_NAMES,
     };
-    format!("{rank} {}", list[fastrand::usize(..list.len())])
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = list[(n * 7 + fastrand::usize(..3)) % list.len()];
+    format!("{rank} {name}")
 }
 
 /// Spawn the full soldier (model + components). The caller adds AI or `Human`.
@@ -740,15 +743,14 @@ fn soldier_death(
     mut events: MessageReader<Killed>,
     mut soldiers: Query<(&mut Soldier, &Transform)>,
     mut vehicles: Query<&mut Vehicle>,
-    names: Query<&Soldier>,
     mut radio: MessageWriter<Radio>,
 ) {
     for ev in events.read() {
         let killer = ev
             .attacker
             .filter(|&a| a != ev.victim)
-            .and_then(|a| names.get(a).ok())
-            .map(|s| (s.name.clone(), s.faction));
+            .and_then(|a| soldiers.get(a).ok())
+            .map(|(s, _)| (s.name.clone(), s.faction));
         let Ok((mut s, _)) = soldiers.get_mut(ev.victim) else {
             continue;
         };
