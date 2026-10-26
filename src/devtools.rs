@@ -8,7 +8,7 @@ use bevy::{
 
 use crate::common::*;
 use crate::mission::BaseVehicle;
-use crate::player::{E_INTERACT, LocalInput, LocalView, read_local_input};
+use crate::player::{E_INTERACT, E_RESPAWN, LocalInput, LocalView, read_local_input};
 use crate::terrain::{LOCATIONS, Terrain};
 use crate::vehicle::{Vehicle, VehicleKind};
 
@@ -53,6 +53,7 @@ enum Act {
     Drive(bool),
     Climb(bool),
     Turn(f32),
+    Respawn,
     Interact,
     GoToTown(usize, f32),
     Exit,
@@ -86,7 +87,10 @@ const SCRIPT: &[(f32, Act)] = &[
     (27.1, Act::GoToTown(1, 140.0)),
     (27.2, Act::ThirdPerson(true)),
     (36.0, Act::Shot("08_town_close")),
-    (36.1, Act::Board(VehicleKind::Heli)),
+    // The town garrison usually wins; redeploy if needed before flying.
+    (40.0, Act::Respawn),
+    (42.0, Act::Respawn),
+    (44.0, Act::Board(VehicleKind::Heli)),
     (44.5, Act::Interact),
     (45.0, Act::ThirdPerson(true)),
     (50.0, Act::Climb(true)),
@@ -149,6 +153,7 @@ fn tour(
             Act::Climb(on) => *climbing = on,
             Act::Turn(a) => view.yaw += a,
             Act::Interact => input.0.bump(E_INTERACT),
+            Act::Respawn => input.0.bump(E_RESPAWN),
             Act::Board(kind) => {
                 if let Some((_, vtf)) = vehicles.iter().find(|(v, _)| v.kind == kind)
                     && let Ok(mut tf) = players.single_mut()
