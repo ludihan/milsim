@@ -1,0 +1,15 @@
+[package]
+name = "milsim"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.20.0", features = ["wav"] }
+fastrand = "2"
+
+# Compile dependencies with optimizations so the game runs smoothly in debug builds.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
