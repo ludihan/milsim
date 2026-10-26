@@ -174,3 +174,14 @@ pub fn dome(radius: f32, rings: u32, segments: u32) -> Mesh {
     }
     finish(positions, normals, indices)
 }
+
+/// Largest distance of any vertex from the mesh origin along an axis (meshes here are centred).
+pub fn half_extent(mesh: &Mesh) -> f32 {
+    match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(VertexAttributeValues::Float32x3(pos)) => pos
+            .iter()
+            .map(|p| p[0].abs().max(p[1].abs()).max(p[2].abs()))
+            .fold(0.0, f32::max),
+        _ => 1.0,
+    }
+}

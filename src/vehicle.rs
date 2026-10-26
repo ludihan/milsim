@@ -258,6 +258,8 @@ struct VPart {
     at: Transform,
     mat: VMat,
     group: Group,
+    /// Small parts that are culled first at distance.
+    detail: bool,
 }
 
 #[derive(Resource)]
@@ -374,11 +376,13 @@ fn blueprint(meshes: &mut Assets<Mesh>, kind: VehicleKind) -> Vec<VPart> {
     use crate::models::{capsule, cylinder, limb, rounded_box, tapered};
     let mut parts = Vec::new();
     let mut add = |mesh: Mesh, at: Transform, mat: VMat, group: Group| {
+        let size = crate::models::half_extent(&mesh) * at.scale.max_element();
         parts.push(VPart {
             mesh: meshes.add(mesh),
             at,
             mat,
             group,
+            detail: size < 0.25,
         });
     };
     let at = |x: f32, y: f32, z: f32| Transform::from_xyz(x, y, z);
@@ -546,9 +550,11 @@ pub fn spawn_vehicle(
     };
     let mut parts = Vec::new();
     for p in &assets.blueprints[kind as usize] {
-        let e = commands
-            .spawn((Mesh3d(p.mesh.clone()), MeshMaterial3d(material(p.mat)), p.at))
-            .id();
+        let mut ec = commands.spawn((Mesh3d(p.mesh.clone()), MeshMaterial3d(material(p.mat)), p.at));
+        if p.detail {
+            ec.insert(crate::quality::LodClass::VehicleDetail);
+        }
+        let e = ec.id();
         parts.push(e);
         match p.group {
             Group::Hull => children.push(e),

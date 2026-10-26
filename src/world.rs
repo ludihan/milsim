@@ -5,7 +5,6 @@ use std::f32::consts::{FRAC_PI_2, PI};
 
 use bevy::{
     asset::RenderAssetUsages,
-    camera::visibility::VisibilityRange,
     light::{CascadeShadowConfigBuilder, NotShadowCaster},
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
@@ -665,6 +664,7 @@ fn spawn_house(
                             scale,
                         },
                         NotShadowCaster,
+                        crate::quality::LodClass::BuildingDetail,
                     ));
                 };
                 let pane = Vec3::new(size.x, h, size.z);
@@ -1104,8 +1104,7 @@ fn spawn_world(
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(9000.0)))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgba(0.12, 0.28, 0.38, 0.88),
-            alpha_mode: AlphaMode::Blend,
+            base_color: Color::srgb(0.12, 0.28, 0.38),
             perceptual_roughness: 0.08,
             reflectance: 0.6,
             ..default()
@@ -1178,7 +1177,7 @@ fn spawn_world(
         let tiers = [(2.5, 2.8, 2.6), (2.1, 2.6, 3.9), (1.7, 2.4, 5.1), (1.25, 2.2, 6.2), (0.75, 1.9, 7.3)];
         for (i, (r, h, y)) in tiers.into_iter().enumerate() {
             let k = dark * (0.9 + 0.08 * ((i as u32 + seed) % 3) as f32);
-            let cone = Cone::new(r, h).mesh().resolution(11).build();
+            let cone = Cone::new(r, h).mesh().resolution(9).build();
             parts.push(
                 colored(cone, pine(k))
                     .rotated_by(Quat::from_rotation_y(i as f32 * 0.7 + seed as f32))
@@ -1207,7 +1206,7 @@ fn spawn_world(
         ];
         for (i, (c, r)) in clumps.into_iter().enumerate() {
             let k = 0.85 + 0.1 * ((i as u32 * 7 + seed) % 4) as f32;
-            parts.push(colored(lumpy(r, 0.18, 2, seed * 13 + i as u32), leaf(k)).translated_by(c));
+            parts.push(colored(lumpy(r, 0.2, 1, seed * 13 + i as u32), leaf(k)).translated_by(c));
         }
         merged(parts)
     };
@@ -1232,7 +1231,7 @@ fn spawn_world(
     ));
     let rocks = [0u32, 1, 2].map(|seed| {
         meshes.add(colored(
-            lumpy(1.0, 0.28, 2, 90 + seed),
+            lumpy(1.0, 0.28, 1, 90 + seed),
             Color::srgb(0.47 + seed as f32 * 0.02, 0.46, 0.44),
         ))
     });
@@ -1290,7 +1289,7 @@ fn spawn_world(
                             rotation: Quat::from_rotation_y(yaw),
                             scale: Vec3::splat(scale),
                         },
-                        VisibilityRange::abrupt(0.0, 1500.0),
+                        crate::quality::LodClass::Tree,
                     ))
                     .id();
                 obstacles.add(Obstacle {
@@ -1327,7 +1326,7 @@ fn spawn_world(
                         rotation: Quat::from_rotation_y(yaw),
                         scale: Vec3::splat(scale),
                     },
-                    VisibilityRange::abrupt(0.0, 600.0),
+                    crate::quality::LodClass::Bush,
                 ));
                 obstacles.add(Obstacle {
                     pos: Vec3::new(x, h + 0.6 * scale, z),
@@ -1347,7 +1346,7 @@ fn spawn_world(
                         rotation: Quat::from_rotation_y(yaw),
                         scale: s,
                     },
-                    VisibilityRange::abrupt(0.0, 900.0),
+                    crate::quality::LodClass::Rock,
                 ));
                 obstacles.add(Obstacle {
                     pos: Vec3::new(x, h, z),

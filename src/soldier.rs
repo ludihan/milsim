@@ -256,6 +256,8 @@ struct Part {
     mesh: Handle<Mesh>,
     at: Transform,
     mat: Mat,
+    /// Small parts that are culled first at distance.
+    detail: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -371,6 +373,7 @@ fn setup_soldier_assets(
         mesh: meshes.add(mesh),
         at,
         mat,
+        detail: false,
     };
     let at = |x: f32, y: f32, z: f32| Transform::from_xyz(x, y, z);
     let along_z = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
@@ -431,6 +434,20 @@ fn setup_soldier_assets(
         part(rounded_box(Vec3::new(0.03, 0.06, 0.08), 0.01), at(-0.05, 0.03, -0.1), Mat::Gun),
     ];
     let _ = between;
+    let mut torso = torso;
+    let mut arms = arms;
+    let mut rifle = rifle;
+    let mut launcher = launcher;
+    for (parts, details) in [
+        (&mut torso, &[3usize, 7, 8, 9, 10, 11][..]),
+        (&mut arms, &[2, 3, 6, 7][..]),
+        (&mut rifle, &[3, 4, 5][..]),
+        (&mut launcher, &[1, 2, 3][..]),
+    ] {
+        for &i in details {
+            parts[i].detail = true;
+        }
+    }
     commands.insert_resource(SoldierAssets {
         torso,
         thigh,
@@ -487,13 +504,15 @@ pub fn spawn_soldier(
     let fi = faction_index(faction);
     let spawn_parts = |commands: &mut Commands, parts: &[Part], parent: Entity| {
         for p in parts {
-            let e = commands
-                .spawn((
-                    Mesh3d(p.mesh.clone()),
-                    MeshMaterial3d(assets.material(p.mat, fi)),
-                    p.at,
-                ))
-                .id();
+            let mut ec = commands.spawn((
+                Mesh3d(p.mesh.clone()),
+                MeshMaterial3d(assets.material(p.mat, fi)),
+                p.at,
+            ));
+            if p.detail {
+                ec.insert(crate::quality::LodClass::SoldierDetail);
+            }
+            let e = ec.id();
             commands.entity(parent).add_child(e);
         }
     };
