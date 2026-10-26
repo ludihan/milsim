@@ -52,6 +52,7 @@ enum Act {
     Board(VehicleKind),
     Drive(bool),
     Climb(bool),
+    Turn(f32),
     Interact,
     GoToTown(usize, f32),
     Exit,
@@ -61,6 +62,9 @@ const SCRIPT: &[(f32, Act)] = &[
     (8.0, Act::Shot("01_first_person")),
     (8.5, Act::ThirdPerson(true)),
     (9.5, Act::Shot("02_third_person")),
+    (9.6, Act::Turn(std::f32::consts::PI)),
+    (9.9, Act::Shot("02b_squad")),
+    (9.95, Act::Turn(std::f32::consts::PI)),
     (10.0, Act::ThirdPerson(false)),
     (10.1, Act::Map(true)),
     (11.0, Act::Shot("03_map")),
@@ -143,6 +147,7 @@ fn tour(
             Act::Ads(on) => *ads = on,
             Act::Drive(on) => *driving = on,
             Act::Climb(on) => *climbing = on,
+            Act::Turn(a) => view.yaw += a,
             Act::Interact => input.0.bump(E_INTERACT),
             Act::Board(kind) => {
                 if let Some((_, vtf)) = vehicles.iter().find(|(v, _)| v.kind == kind)
