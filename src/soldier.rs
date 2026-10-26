@@ -675,8 +675,12 @@ fn soldier_movement(
         new.y = terrain.height(new.x, new.z);
         let speed_now = Vec2::new(new.x - pos.x, new.z - pos.z).length() / dt.max(1e-4);
         s.walk_phase += speed_now * dt * 2.2;
-        tf.translation = new;
-        tf.rotation = Quat::from_rotation_y(s.yaw);
+        // Writing an unchanged transform would still re-propagate the whole model hierarchy.
+        let rot = Quat::from_rotation_y(s.yaw);
+        if tf.translation != new || tf.rotation != rot {
+            tf.translation = new;
+            tf.rotation = rot;
+        }
         s.pitch = s.pitch.clamp(-1.45, 1.45);
     }
 }
@@ -884,15 +888,45 @@ fn corpse_cleanup(
     }
 }
 
+/// Ease a joint toward its pose, snapping once close so idle soldiers stop writing transforms
+/// (any write re-propagates every part below the joint).
+fn ease(t: &mut Mut<Transform>, pos: Vec3, rot: Quat, k: f32) {
+    let close = t.translation.distance_squared(pos) < 1e-6 && t.rotation.angle_between(rot) < 2e-3;
+    if close {
+        if t.translation != pos || t.rotation != rot {
+            t.translation = pos;
+            t.rotation = rot;
+        }
+        return;
+    }
+    let (p, r) = (t.translation.lerp(pos, k), t.rotation.slerp(rot, k));
+    t.translation = p;
+    t.rotation = r;
+}
+
 #[allow(clippy::type_complexity)]
 fn animate_soldiers(
     time: Res<Time>,
-    soldiers: Query<(&Soldier, &Health, &SoldierParts, &Transform)>,
-    mut parts: Query<(&mut Transform, &mut Visibility), Without<Soldier>>,
+    mut frame: Local<u32>,
+    camera: Single<&Transform, With<crate::player::MainCamera>>,
+    soldiers: Query<(Entity, &Soldier, &Health, &SoldierParts, &Transform), Without<crate::player::MainCamera>>,
+    mut parts: Query<
+        (&mut Transform, &mut Visibility),
+        (Without<Soldier>, Without<crate::player::MainCamera>),
+    >,
 ) {
+    *frame = frame.wrapping_add(1);
     let dt = time.delta_secs();
-    let k = (dt * 10.0).min(1.0);
-    for (s, health, sp, _) in &soldiers {
+    let cam = camera.translation;
+    for (e, s, health, sp, tf) in &soldiers {
+        // Level of detail: nearby soldiers animate every frame, distant ones a quarter as often,
+        // and far away only the overall pose is kept up to date.
+        let dist = tf.translation.distance(cam);
+        let stride = if dist < 60.0 { 1 } else { 4 };
+        if (*frame + e.index_u32()) % stride != 0 {
+            continue;
+        }
+        let k = (dt * stride as f32 * 10.0).min(1.0);
         let (target_t, target_r) = if health.dead {
             (Vec3::new(0.0, 0.12, 0.0), Quat::from_rotation_x(FRAC_PI_2))
         } else {
@@ -903,8 +937,10 @@ fn animate_soldiers(
             }
         };
         if let Ok((mut t, _)) = parts.get_mut(sp.pivot) {
-            t.translation = t.translation.lerp(target_t, k);
-            t.rotation = t.rotation.slerp(target_r, k);
+            ease(&mut t, target_t, target_r, k);
+        }
+        if dist > 400.0 && s.vehicle.is_none() && !health.dead && s.stance != Stance::Crouch {
+            continue;
         }
         // Legs: swing from the hip, bend at the knee; kneel when crouched.
         let gait = if health.dead {
@@ -925,10 +961,12 @@ fn animate_soldiers(
                 (swing, bend)
             };
             if let Ok((mut t, _)) = parts.get_mut(sp.hips[i]) {
-                t.rotation = t.rotation.slerp(Quat::from_rotation_x(hip), k);
+                let p = t.translation;
+                ease(&mut t, p, Quat::from_rotation_x(hip), k);
             }
             if let Ok((mut t, _)) = parts.get_mut(sp.knees[i]) {
-                t.rotation = t.rotation.slerp(Quat::from_rotation_x(knee), k);
+                let p = t.translation;
+                ease(&mut t, p, Quat::from_rotation_x(knee), k);
             }
         }
         if let Ok((mut t, _)) = parts.get_mut(sp.aim) {
@@ -939,29 +977,32 @@ fn animate_soldiers(
                 _ if s.sprinting => -0.6,
                 _ => s.pitch,
             };
-            t.rotation = Quat::from_rotation_x(pitch);
+            let p = t.translation;
+            ease(&mut t, p, Quat::from_rotation_x(pitch), 1.0);
         }
         let launcher = s.held == WeaponKind::Launcher;
         if let Ok((mut t, mut v)) = parts.get_mut(sp.rifle) {
-            *v = Visibility::Inherited;
+            v.set_if_neq(Visibility::Inherited);
             // The rifle is slung across the back while the launcher is shouldered.
-            *t = if launcher {
+            let want = if launcher {
                 Transform::from_xyz(-0.05, -0.1, 0.42).with_rotation(Quat::from_rotation_z(0.6))
             } else {
                 Transform::IDENTITY
             };
+            t.set_if_neq(want);
         }
         if let Ok((mut t, mut v)) = parts.get_mut(sp.launcher) {
-            *v = if launcher || s.role == Role::AtSoldier {
+            v.set_if_neq(if launcher || s.role == Role::AtSoldier {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
-            };
-            *t = if launcher {
+            });
+            let want = if launcher {
                 Transform::from_xyz(0.16, 0.06, -0.15)
             } else {
                 Transform::from_xyz(0.12, -0.12, 0.33).with_rotation(Quat::from_rotation_x(-1.1))
             };
+            t.set_if_neq(want);
         }
     }
 }

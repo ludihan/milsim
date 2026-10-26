@@ -1075,6 +1075,10 @@ fn client_send(mut net: ResMut<NetMode>, time: Res<Time>, input: Res<LocalInput>
 fn client_interpolate(time: Res<Time>, mut q: Query<(&mut Interp, &mut Transform)>) {
     let step = time.delta_secs() / SNAPSHOT_INTERVAL;
     for (mut i, mut tf) in &mut q {
+        // Already at the latest snapshot: leave the transform (and its hierarchy) untouched.
+        if i.t >= 1.0 {
+            continue;
+        }
         i.t = (i.t + step).min(1.25);
         let t = i.t.min(1.0);
         tf.translation = i.from.lerp(i.to, t);

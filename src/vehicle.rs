@@ -141,6 +141,8 @@ pub struct Vehicle {
     pub wrecked_visual: bool,
     pub rotor: f32,
     pub airborne: bool,
+    /// Parked and at rest: physics is skipped until someone gets in.
+    pub settled: bool,
     pub smoke_timer: f32,
     pub turret: Entity,
     pub gun: Entity,
@@ -598,6 +600,7 @@ pub fn spawn_vehicle(
                 wrecked_visual: false,
                 rotor: 0.0,
                 airborne: false,
+                settled: false,
                 smoke_timer: 0.0,
                 turret,
                 gun,
@@ -728,6 +731,9 @@ fn ground_physics(
         if v.kind == VehicleKind::Heli {
             continue;
         }
+        if v.driver.is_none() && v.speed.abs() < 0.01 && v.settled {
+            continue;
+        }
         let spec = v.spec();
         let inp = if v.driver.is_some() && !v.destroyed {
             v.input.clone()
@@ -843,8 +849,15 @@ fn ground_physics(
             v.speed *= 1.0 - dt * 2.0;
         }
         v.velocity = (new - pos) / dt.max(1e-4);
-        tf.translation = new;
-        tf.rotation = Quat::from_euler(EulerRot::YXZ, v.yaw, v.pitch, v.roll);
+        let rot = Quat::from_euler(EulerRot::YXZ, v.yaw, v.pitch, v.roll);
+        v.settled = v.driver.is_none()
+            && v.speed.abs() < 0.01
+            && (new - tf.translation).length_squared() < 1e-8
+            && rot.angle_between(tf.rotation) < 1e-4;
+        if tf.translation != new || tf.rotation != rot {
+            tf.translation = new;
+            tf.rotation = rot;
+        }
         if let Some(c) = circles.iter_mut().find(|c| c.0 == e) {
             c.1 = new;
         }
@@ -944,8 +957,10 @@ fn heli_physics(
             });
         }
         v.speed = speed;
-        tf.translation = new;
-        tf.rotation = rot;
+        if tf.translation != new || tf.rotation != rot {
+            tf.translation = new;
+            tf.rotation = rot;
+        }
     }
 }
 
@@ -1252,10 +1267,19 @@ fn animate_vehicles(
     let dt = time.delta_secs();
     for v in &vehicles {
         if let Ok(mut t) = parts.get_mut(v.turret) {
-            t.rotation = Quat::from_rotation_y(v.turret_yaw);
+            let r = Quat::from_rotation_y(v.turret_yaw);
+            if t.rotation != r {
+                t.rotation = r;
+            }
         }
         if let Ok(mut t) = parts.get_mut(v.gun) {
-            t.rotation = Quat::from_rotation_x(v.turret_pitch);
+            let r = Quat::from_rotation_x(v.turret_pitch);
+            if t.rotation != r {
+                t.rotation = r;
+            }
+        }
+        if v.rotor <= 0.0 {
+            continue;
         }
         for &(r, axis) in &v.rotors {
             if let Ok(mut t) = parts.get_mut(r) {
