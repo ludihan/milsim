@@ -409,7 +409,7 @@ fn cursor_grab(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn read_local_input(
+pub fn read_local_input(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     motion: Res<AccumulatedMouseMotion>,
@@ -508,7 +508,7 @@ fn read_local_input(
     }
 }
 
-fn copy_local_input(local: Res<LocalInput>, mut humans: ResMut<Humans>, state: Res<LocalState>) {
+pub fn copy_local_input(local: Res<LocalInput>, mut humans: ResMut<Humans>, state: Res<LocalState>) {
     if let Some(slot) = humans.get_mut(state.id) {
         slot.input = local.0.clone();
     }

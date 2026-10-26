@@ -10,6 +10,7 @@
 mod ai;
 mod audio;
 mod combat;
+mod devtools;
 mod common;
 mod hud;
 mod mission;
@@ -118,6 +119,7 @@ fn main() {
         net::NetPlugin,
         mission::MissionPlugin,
         hud::HudPlugin,
+        devtools::DevToolsPlugin,
     ));
     if !is_client {
         // The host is player 0.
