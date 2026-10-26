@@ -25,6 +25,15 @@ impl Plugin for DevToolsPlugin {
             time: 0.0,
             step: 0,
             frames: 0,
+            segment_start: (0.0, 0),
+        })
+        .init_resource::<CpuTimer>()
+        .add_systems(First, |mut t: ResMut<CpuTimer>| t.start = Some(std::time::Instant::now()))
+        .add_systems(Last, |mut t: ResMut<CpuTimer>| {
+            if let Some(start) = t.start.take() {
+                t.total += start.elapsed().as_secs_f64();
+                t.frames += 1;
+            }
         })
         .add_systems(
             Update,
@@ -35,12 +44,21 @@ impl Plugin for DevToolsPlugin {
     }
 }
 
+/// Main-world CPU time per frame (simulation and engine systems, excluding rendering).
+#[derive(Resource, Default)]
+struct CpuTimer {
+    start: Option<std::time::Instant>,
+    total: f64,
+    frames: u32,
+}
+
 #[derive(Resource)]
 struct Tour {
     dir: String,
     time: f32,
     step: usize,
     frames: u32,
+    segment_start: (f32, u32),
 }
 
 #[derive(Clone, Copy)]
@@ -124,6 +142,7 @@ fn tour(
     mut ads: Local<bool>,
     mut climbing: Local<bool>,
     net: Res<crate::net::NetMode>,
+    mut cpu: ResMut<CpuTimer>,
 ) {
     let script = if net.is_client() { CLIENT_SCRIPT } else { SCRIPT };
     tour.time += time.delta_secs();
@@ -143,7 +162,13 @@ fn tour(
         match act {
             Act::Shot(name) => {
                 let path = format!("{}/{name}.png", tour.dir);
-                info!("tour: saving {path}");
+                let (t0, f0) = tour.segment_start;
+                let fps = (tour.frames - f0) as f32 / (tour.time - t0).max(0.001);
+                let cpu_ms = cpu.total / cpu.frames.max(1) as f64 * 1000.0;
+                cpu.total = 0.0;
+                cpu.frames = 0;
+                info!("tour: {name}: {fps:.1} fps, main-world CPU {cpu_ms:.1} ms/frame");
+                tour.segment_start = (tour.time, tour.frames);
                 commands.spawn(Screenshot::primary_window()).observe(save_to_disk(path));
             }
             Act::ThirdPerson(on) => view.third_person = on,
