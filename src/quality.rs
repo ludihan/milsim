@@ -4,10 +4,15 @@
 //! forced with `--quality low|medium|high`, and cycled in game with F9. It controls render
 //! resolution, anti-aliasing, shadows, fog and draw distances per kind of object.
 
+use std::collections::HashMap;
+
 use bevy::{
     anti_alias::fxaa::Fxaa,
-    camera::{RenderTarget, visibility::VisibilityRange},
-    light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap},
+    camera::{
+        RenderTarget,
+        visibility::{RenderLayers, VisibilityRange},
+    },
+    light::{CascadeShadowConfigBuilder, DirectionalLightShadowMap, cluster::ClusterConfig},
     pbr::{DistanceFog, FogFalloff},
     prelude::*,
     render::{
@@ -18,7 +23,7 @@ use bevy::{
 };
 
 use crate::common::{Phase, Radio, RADIO_SYSTEM, SKY_COLOR};
-use crate::player::MainCamera;
+use crate::player::{MainCamera, VIEW_LAYER, ViewModelPart};
 
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Quality {
@@ -96,7 +101,7 @@ pub struct QualityOverride {
 }
 
 /// What kind of object an entity is, for distance culling.
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum LodClass {
     Tree,
     Bush,
@@ -104,6 +109,26 @@ pub enum LodClass {
     BuildingDetail,
     SoldierDetail,
     VehicleDetail,
+}
+
+impl LodClass {
+    /// Static props are grouped into chunks and culled per chunk instead of per entity.
+    fn is_static(self) -> bool {
+        matches!(
+            self,
+            LodClass::Tree | LodClass::Bush | LodClass::Rock | LodClass::BuildingDetail
+        )
+    }
+}
+
+const CHUNK: f32 = 128.0;
+
+/// Parent of all static props of one class in one 128 m cell. Hiding the chunk hides them all,
+/// which lets Bevy skip their per-entity visibility work.
+#[derive(Component)]
+struct PropChunk {
+    class: LodClass,
+    center: Vec2,
 }
 
 /// Full-screen image showing the scaled-down 3D render.
@@ -123,10 +148,19 @@ impl Plugin for QualityPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<QualityOverride>()
             .insert_resource(SceneScale(1.0))
+            .add_observer(range_on_spawn)
             .add_systems(Startup, setup_scene_target)
+            .add_systems(PostStartup, chunk_static_props)
             .add_systems(
                 Update,
-                (pick_quality, cycle_quality, apply_quality, resize_scene_target, apply_lod)
+                (
+                    pick_quality,
+                    cycle_quality,
+                    apply_quality,
+                    resize_scene_target,
+                    apply_lod,
+                    cull_chunks,
+                )
                     .chain()
                     .in_set(Phase::Camera),
             );
@@ -214,8 +248,9 @@ fn apply_quality(
         (Entity, &mut DistanceFog, &mut Projection, &mut Msaa),
         With<MainCamera>,
     >,
-    mut view_cams: Query<&mut Msaa, (With<Camera3d>, Without<MainCamera>)>,
+    mut view_cams: Query<(&mut Msaa, &mut Camera), (With<Camera3d>, Without<MainCamera>)>,
     mut suns: Query<(Entity, &mut DirectionalLight)>,
+    mut view_parts: Query<&mut RenderLayers, With<ViewModelPart>>,
 ) {
     let Some(q) = quality else { return };
     if !q.is_changed() {
@@ -242,13 +277,26 @@ fn apply_quality(
         } else {
             commands.entity(e).remove::<Fxaa>();
         }
+        // Clustered lighting only matters for the brief explosion flashes, which Low skips.
+        if q == Quality::Low {
+            commands.entity(e).insert(ClusterConfig::Single);
+        } else {
+            commands.entity(e).insert(ClusterConfig::default());
+        }
     }
-    for mut msaa in &mut view_cams {
+    // On Low the weapon is drawn by the main camera, saving a whole second 3D pass.
+    let separate_view_model = q != Quality::Low;
+    for (mut msaa, mut cam) in &mut view_cams {
         *msaa = if q == Quality::High {
             Msaa::Sample4
         } else {
             Msaa::Off
         };
+        cam.is_active = separate_view_model;
+    }
+    let layer = RenderLayers::layer(if separate_view_model { VIEW_LAYER } else { 0 });
+    for mut l in &mut view_parts {
+        *l = layer.clone();
     }
     for (e, mut sun) in &mut suns {
         sun.shadow_maps_enabled = q != Quality::Low;
@@ -308,22 +356,104 @@ fn resize_scene_target(
     }
 }
 
-/// Give every LOD-classed entity the draw distance for the current quality.
+/// New entities with a LOD class get their draw distance as soon as they spawn.
+fn range_on_spawn(
+    add: On<Add<LodClass>>,
+    quality: Option<Res<Quality>>,
+    classes: Query<&LodClass>,
+    mut commands: Commands,
+) {
+    let q = quality.map_or(Quality::Low, |q| *q);
+    if let Ok(class) = classes.get(add.entity)
+        && !class.is_static()
+    {
+        commands
+            .entity(add.entity)
+            .insert(VisibilityRange::abrupt(0.0, q.range(*class)));
+    }
+}
+
+/// When the preset changes, update the draw distance of every dynamic LOD-classed entity.
 fn apply_lod(
     mut commands: Commands,
     quality: Option<Res<Quality>>,
     all: Query<(Entity, &LodClass)>,
-    added: Query<(Entity, &LodClass), Added<LodClass>>,
 ) {
     let Some(q) = quality else { return };
-    let iter: Box<dyn Iterator<Item = (Entity, &LodClass)>> = if q.is_changed() {
-        Box::new(all.iter())
-    } else {
-        Box::new(added.iter())
-    };
-    for (e, class) in iter {
-        commands
-            .entity(e)
-            .insert(VisibilityRange::abrupt(0.0, q.range(*class)));
+    if !q.is_changed() {
+        return;
+    }
+    for (e, class) in &all {
+        if !class.is_static() {
+            commands
+                .entity(e)
+                .insert(VisibilityRange::abrupt(0.0, q.range(*class)));
+        }
+    }
+}
+
+/// Group static props under per-cell chunk entities (done once, after the world is generated).
+fn chunk_static_props(
+    mut commands: Commands,
+    props: Query<(Entity, &LodClass, &Transform), Without<ChildOf>>,
+) {
+    let mut chunks: HashMap<(LodClass, i32, i32), (Entity, Vec<Entity>)> = HashMap::new();
+    for (e, class, tf) in &props {
+        if !class.is_static() {
+            continue;
+        }
+        let cell = (
+            *class,
+            (tf.translation.x / CHUNK).floor() as i32,
+            (tf.translation.z / CHUNK).floor() as i32,
+        );
+        let entry = chunks.entry(cell).or_insert_with(|| {
+            let center = Vec2::new((cell.1 as f32 + 0.5) * CHUNK, (cell.2 as f32 + 0.5) * CHUNK);
+            let chunk = commands
+                .spawn((
+                    PropChunk {
+                        class: *class,
+                        center,
+                    },
+                    Transform::IDENTITY,
+                    Visibility::Hidden,
+                ))
+                .id();
+            (chunk, Vec::new())
+        });
+        entry.1.push(e);
+        commands.entity(e).remove::<(LodClass, VisibilityRange)>();
+    }
+    let count = chunks.len();
+    for (chunk, members) in chunks.into_values() {
+        commands.entity(chunk).add_children(&members);
+    }
+    info!("Grouped static props into {count} chunks");
+}
+
+/// Show or hide whole chunks by distance from the camera.
+fn cull_chunks(
+    quality: Option<Res<Quality>>,
+    camera: Single<&Transform, With<MainCamera>>,
+    mut chunks: Query<(&PropChunk, &mut Visibility)>,
+    mut last: Local<Option<(Vec2, Quality)>>,
+) {
+    let Some(q) = quality else { return };
+    let cam = Vec2::new(camera.translation.x, camera.translation.z);
+    if let Some((p, lq)) = *last
+        && lq == *q
+        && p.distance_squared(cam) < 8.0 * 8.0
+    {
+        return;
+    }
+    *last = Some((cam, *q));
+    let half_diagonal = CHUNK * std::f32::consts::FRAC_1_SQRT_2;
+    for (chunk, mut vis) in &mut chunks {
+        let d = chunk.center.distance(cam) - half_diagonal;
+        vis.set_if_neq(if d < q.range(chunk.class) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
 }

@@ -1091,7 +1091,9 @@ fn spawn_explosion_fx(
     mut commands: Commands,
     mut events: MessageReader<ExplosionFx>,
     fx: Res<FxAssets>,
+    quality: Option<Res<crate::quality::Quality>>,
 ) {
+    let lights = quality.is_none_or(|q| *q != crate::quality::Quality::Low);
     for ev in events.read() {
         let s = ev.size;
         spawn_puff(&mut commands, &fx, &fx.flash, ev.pos, s * 0.25, 0.25, Vec3::ZERO, 6.0);
@@ -1112,6 +1114,9 @@ fn spawn_explosion_fx(
                 v * (s * 0.25),
                 0.6,
             );
+        }
+        if !lights {
+            continue;
         }
         commands.spawn((
             PointLight {
