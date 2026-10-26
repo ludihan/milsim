@@ -2,7 +2,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use bevy::{light::NotShadowCaster, prelude::*};
+use bevy::prelude::*;
 
 use crate::audio::{PlaySound, SoundKind};
 use crate::combat::{Shooter, Weapon, WeaponKind, apply_spread, spawn_projectile};
@@ -240,7 +240,8 @@ impl Loadout {
 pub struct SoldierParts {
     pub pivot: Entity,
     pub aim: Entity,
-    pub legs: [Entity; 2],
+    pub hips: [Entity; 2],
+    pub knees: [Entity; 2],
     pub rifle: Entity,
     pub launcher: Entity,
 }
@@ -250,23 +251,56 @@ pub struct Corpse {
     pub timer: f32,
 }
 
+/// One mesh + transform per body part; the soldier model is assembled from these.
+struct Part {
+    mesh: Handle<Mesh>,
+    at: Transform,
+    mat: Mat,
+}
+
+#[derive(Clone, Copy)]
+enum Mat {
+    Uniform,
+    Gear,
+    Helmet,
+    Skin,
+    Glove,
+    Boot,
+    Gun,
+    Tube,
+}
+
 #[derive(Resource)]
 pub struct SoldierAssets {
-    leg: Handle<Mesh>,
-    torso: Handle<Mesh>,
-    vest: Handle<Mesh>,
-    pack: Handle<Mesh>,
-    head: Handle<Mesh>,
-    helmet: Handle<Mesh>,
-    arm: Handle<Mesh>,
-    rifle: Handle<Mesh>,
-    launcher: Handle<Mesh>,
+    torso: Vec<Part>,
+    thigh: Vec<Part>,
+    shin: Vec<Part>,
+    arms: Vec<Part>,
+    rifle: Vec<Part>,
+    launcher: Vec<Part>,
     skin: Handle<StandardMaterial>,
+    glove: Handle<StandardMaterial>,
+    boot: Handle<StandardMaterial>,
     gun: Handle<StandardMaterial>,
     tube: Handle<StandardMaterial>,
     uniform: [Handle<StandardMaterial>; 2],
     gear: [Handle<StandardMaterial>; 2],
     helmet_mat: [Handle<StandardMaterial>; 2],
+}
+
+impl SoldierAssets {
+    fn material(&self, m: Mat, fi: usize) -> Handle<StandardMaterial> {
+        match m {
+            Mat::Uniform => self.uniform[fi].clone(),
+            Mat::Gear => self.gear[fi].clone(),
+            Mat::Helmet => self.helmet_mat[fi].clone(),
+            Mat::Skin => self.skin.clone(),
+            Mat::Glove => self.glove.clone(),
+            Mat::Boot => self.boot.clone(),
+            Mat::Gun => self.gun.clone(),
+            Mat::Tube => self.tube.clone(),
+        }
+    }
 }
 
 fn faction_index(f: Faction) -> usize {
@@ -308,6 +342,7 @@ fn setup_soldier_assets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    use crate::models::{between, capsule, cylinder, dome, limb, rounded_box};
     let mut m = |c: Color, rough: f32| {
         materials.add(StandardMaterial {
             base_color: c,
@@ -315,31 +350,102 @@ fn setup_soldier_assets(
             ..default()
         })
     };
+    let skin = m(Color::srgb(0.72, 0.55, 0.43), 0.75);
+    let glove = m(Color::srgb(0.2, 0.18, 0.15), 0.9);
+    let boot = m(Color::srgb(0.24, 0.2, 0.15), 0.8);
+    let gun = m(Color::srgb(0.09, 0.09, 0.09), 0.45);
+    let tube = m(Color::srgb(0.3, 0.33, 0.22), 0.7);
+    let uniform = [
+        m(Color::srgb(0.52, 0.46, 0.35), 0.95),
+        m(Color::srgb(0.27, 0.31, 0.22), 0.95),
+    ];
+    let gear = [
+        m(Color::srgb(0.42, 0.38, 0.28), 0.9),
+        m(Color::srgb(0.17, 0.19, 0.15), 0.9),
+    ];
+    let helmet_mat = [
+        m(Color::srgb(0.47, 0.43, 0.32), 0.8),
+        m(Color::srgb(0.24, 0.27, 0.2), 0.8),
+    ];
+    let mut part = |mesh: Mesh, at: Transform, mat: Mat| Part {
+        mesh: meshes.add(mesh),
+        at,
+        mat,
+    };
+    let at = |x: f32, y: f32, z: f32| Transform::from_xyz(x, y, z);
+    let along_z = Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+
+    // Pivot space: feet at the origin, facing -Z.
+    let mut torso = vec![
+        part(rounded_box(Vec3::new(0.34, 0.2, 0.22), 0.07), at(0.0, 0.95, 0.0), Mat::Uniform),
+        part(rounded_box(Vec3::new(0.36, 0.46, 0.22), 0.09), at(0.0, 1.25, 0.0), Mat::Uniform),
+        part(rounded_box(Vec3::new(0.4, 0.33, 0.28), 0.05), at(0.0, 1.27, 0.0), Mat::Gear),
+        part(cylinder(0.05, 0.12, 12), at(0.0, 1.52, 0.0), Mat::Skin),
+        part(Sphere::new(0.1).mesh().uv(16, 12), at(0.0, 1.64, -0.005).with_scale(Vec3::new(0.9, 1.08, 1.0)), Mat::Skin),
+        part(dome(0.13, 6, 16), at(0.0, 1.645, 0.012).with_scale(Vec3::new(1.0, 0.95, 1.08)), Mat::Helmet),
+        part(rounded_box(Vec3::new(0.29, 0.38, 0.15), 0.05), at(0.0, 1.27, 0.2), Mat::Gear),
+        part(capsule(0.06, 0.24), at(0.0, 1.5, 0.21).with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)), Mat::Uniform),
+        part(rounded_box(Vec3::new(0.38, 0.06, 0.24), 0.025), at(0.0, 0.98, 0.0), Mat::Gear),
+    ];
+    for x in [-0.11f32, 0.0, 0.11] {
+        torso.push(part(rounded_box(Vec3::new(0.085, 0.12, 0.05), 0.015), at(x, 1.17, -0.16), Mat::Gear));
+    }
+    // Leg segments, in hip / knee space.
+    let thigh = vec![{
+        let (mesh, t) = limb(0.085, Vec3::ZERO, Vec3::new(0.0, -0.45, 0.0));
+        part(mesh, t, Mat::Uniform)
+    }];
+    let shin = vec![
+        {
+            let (mesh, t) = limb(0.066, Vec3::ZERO, Vec3::new(0.0, -0.4, 0.0));
+            part(mesh, t, Mat::Uniform)
+        },
+        part(rounded_box(Vec3::new(0.11, 0.1, 0.28), 0.035), at(0.0, -0.42, -0.05), Mat::Boot),
+    ];
+    // Arms and weapons, in aim space (origin between the shoulders, pitched with the aim).
+    let mut arms = Vec::new();
+    for (shoulder, elbow, hand) in [
+        (Vec3::new(0.2, 0.0, 0.0), Vec3::new(0.22, -0.22, -0.08), Vec3::new(0.11, -0.13, -0.24)),
+        (Vec3::new(-0.2, 0.0, 0.0), Vec3::new(-0.14, -0.2, -0.27), Vec3::new(0.06, -0.1, -0.5)),
+    ] {
+        let (upper, ut) = limb(0.056, shoulder, elbow);
+        let (fore, ft) = limb(0.047, elbow, hand);
+        arms.push(part(upper, ut, Mat::Uniform));
+        arms.push(part(fore, ft, Mat::Uniform));
+        arms.push(part(Sphere::new(0.045).mesh().uv(10, 8), Transform::from_translation(hand), Mat::Glove));
+        arms.push(part(Sphere::new(0.07).mesh().uv(12, 8), Transform::from_translation(shoulder), Mat::Uniform));
+    }
+    let rifle = vec![
+        part(rounded_box(Vec3::new(0.05, 0.09, 0.3), 0.015), at(0.1, -0.1, -0.32), Mat::Gun),
+        part(rounded_box(Vec3::new(0.055, 0.065, 0.24), 0.02), at(0.1, -0.085, -0.56), Mat::Gun),
+        part(cylinder(0.011, 0.36, 10), at(0.1, -0.085, -0.82).with_rotation(along_z), Mat::Gun),
+        part(cylinder(0.02, 0.13, 12), at(0.1, -0.02, -0.33).with_rotation(along_z), Mat::Gun),
+        part(rounded_box(Vec3::new(0.035, 0.16, 0.07), 0.012), at(0.1, -0.2, -0.36).with_rotation(Quat::from_rotation_x(0.25)), Mat::Gun),
+        part(rounded_box(Vec3::new(0.04, 0.11, 0.06), 0.012), at(0.1, -0.17, -0.22).with_rotation(Quat::from_rotation_x(-0.3)), Mat::Gun),
+        part(rounded_box(Vec3::new(0.045, 0.1, 0.24), 0.02), at(0.1, -0.12, -0.06), Mat::Gun),
+    ];
+    let launcher = vec![
+        part(cylinder(0.045, 1.0, 16), Transform::from_rotation(along_z), Mat::Tube),
+        part(cylinder(0.055, 0.08, 16), at(0.0, 0.0, -0.48).with_rotation(along_z), Mat::Tube),
+        part(cylinder(0.055, 0.08, 16), at(0.0, 0.0, 0.48).with_rotation(along_z), Mat::Tube),
+        part(rounded_box(Vec3::new(0.03, 0.06, 0.08), 0.01), at(-0.05, 0.03, -0.1), Mat::Gun),
+    ];
+    let _ = between;
     commands.insert_resource(SoldierAssets {
-        leg: meshes.add(Cuboid::new(0.17, 0.88, 0.2)),
-        torso: meshes.add(Cuboid::new(0.42, 0.6, 0.24)),
-        vest: meshes.add(Cuboid::new(0.46, 0.42, 0.3)),
-        pack: meshes.add(Cuboid::new(0.34, 0.42, 0.18)),
-        head: meshes.add(Sphere::new(0.11)),
-        helmet: meshes.add(Sphere::new(0.135)),
-        arm: meshes.add(Cuboid::new(0.1, 0.5, 0.1)),
-        rifle: meshes.add(Cuboid::new(0.05, 0.1, 0.85)),
-        launcher: meshes.add(Cylinder::new(0.065, 1.0)),
-        skin: m(Color::srgb(0.75, 0.58, 0.45), 0.8),
-        gun: m(Color::srgb(0.1, 0.1, 0.1), 0.5),
-        tube: m(Color::srgb(0.3, 0.33, 0.22), 0.7),
-        uniform: [
-            m(Color::srgb(0.52, 0.46, 0.35), 0.95),
-            m(Color::srgb(0.27, 0.31, 0.22), 0.95),
-        ],
-        gear: [
-            m(Color::srgb(0.42, 0.38, 0.28), 0.9),
-            m(Color::srgb(0.16, 0.18, 0.14), 0.9),
-        ],
-        helmet_mat: [
-            m(Color::srgb(0.47, 0.43, 0.32), 0.8),
-            m(Color::srgb(0.24, 0.27, 0.2), 0.8),
-        ],
+        torso,
+        thigh,
+        shin,
+        arms,
+        rifle,
+        launcher,
+        skin,
+        glove,
+        boot,
+        gun,
+        tube,
+        uniform,
+        gear,
+        helmet_mat,
     });
 }
 
@@ -379,8 +485,17 @@ pub fn spawn_soldier(
     yaw: f32,
 ) -> Entity {
     let fi = faction_index(faction);
-    let part = |mesh: &Handle<Mesh>, mat: &Handle<StandardMaterial>, t: Transform| {
-        (Mesh3d(mesh.clone()), MeshMaterial3d(mat.clone()), t)
+    let spawn_parts = |commands: &mut Commands, parts: &[Part], parent: Entity| {
+        for p in parts {
+            let e = commands
+                .spawn((
+                    Mesh3d(p.mesh.clone()),
+                    MeshMaterial3d(assets.material(p.mat, fi)),
+                    p.at,
+                ))
+                .id();
+            commands.entity(parent).add_child(e);
+        }
     };
     let root = commands
         .spawn((
@@ -392,31 +507,33 @@ pub fn spawn_soldier(
             MissionEntity,
         ))
         .id();
-    let legs = [-0.11f32, 0.11].map(|x| {
-        commands
+    let pivot = commands.spawn((Transform::default(), Visibility::default())).id();
+    spawn_parts(commands, &assets.torso, pivot);
+    let mut hips = [Entity::PLACEHOLDER; 2];
+    let mut knees = [Entity::PLACEHOLDER; 2];
+    for (i, x) in [-0.1f32, 0.1].into_iter().enumerate() {
+        let hip = commands
             .spawn((Transform::from_xyz(x, 0.9, 0.0), Visibility::default()))
-            .with_child(part(
-                &assets.leg,
-                &assets.uniform[fi],
-                Transform::from_xyz(0.0, -0.44, 0.0),
-            ))
-            .id()
-    });
-    let rifle = commands
-        .spawn(part(
-            &assets.rifle,
-            &assets.gun,
-            Transform::from_xyz(0.13, -0.05, -0.4),
-        ))
+            .id();
+        spawn_parts(commands, &assets.thigh, hip);
+        let knee = commands
+            .spawn((Transform::from_xyz(0.0, -0.45, 0.0), Visibility::default()))
+            .id();
+        spawn_parts(commands, &assets.shin, knee);
+        commands.entity(hip).add_child(knee);
+        commands.entity(pivot).add_child(hip);
+        hips[i] = hip;
+        knees[i] = knee;
+    }
+    let aim = commands
+        .spawn((Transform::from_xyz(0.0, 1.43, 0.0), Visibility::default()))
         .id();
+    spawn_parts(commands, &assets.arms, aim);
+    let rifle = commands.spawn((Transform::default(), Visibility::default())).id();
+    spawn_parts(commands, &assets.rifle, rifle);
     let launcher = commands
         .spawn((
-            part(
-                &assets.launcher,
-                &assets.tube,
-                Transform::from_xyz(0.17, 0.08, -0.15)
-                    .with_rotation(Quat::from_rotation_x(FRAC_PI_2)),
-            ),
+            Transform::default(),
             if role == Role::AtSoldier {
                 Visibility::Inherited
             } else {
@@ -424,56 +541,14 @@ pub fn spawn_soldier(
             },
         ))
         .id();
-    let aim = commands
-        .spawn((Transform::from_xyz(0.0, 1.42, 0.0), Visibility::default()))
-        .with_children(|p| {
-            for x in [-0.2f32, 0.2] {
-                p.spawn(part(
-                    &assets.arm,
-                    &assets.uniform[fi],
-                    Transform::from_xyz(x * 0.6, -0.05, -0.2)
-                        .with_rotation(Quat::from_rotation_x(FRAC_PI_2) * Quat::from_rotation_z(x)),
-                ));
-            }
-        })
-        .add_children(&[rifle, launcher])
-        .id();
-    let pivot = commands
-        .spawn((Transform::default(), Visibility::default()))
-        .with_children(|p| {
-            p.spawn(part(
-                &assets.torso,
-                &assets.uniform[fi],
-                Transform::from_xyz(0.0, 1.22, 0.0),
-            ));
-            p.spawn(part(
-                &assets.vest,
-                &assets.gear[fi],
-                Transform::from_xyz(0.0, 1.25, 0.0),
-            ));
-            p.spawn(part(
-                &assets.pack,
-                &assets.gear[fi],
-                Transform::from_xyz(0.0, 1.25, 0.22),
-            ));
-            p.spawn(part(
-                &assets.head,
-                &assets.skin,
-                Transform::from_xyz(0.0, 1.62, 0.0),
-            ));
-            p.spawn(part(
-                &assets.helmet,
-                &assets.helmet_mat[fi],
-                Transform::from_xyz(0.0, 1.67, 0.01).with_scale(Vec3::new(1.0, 0.75, 1.05)),
-            ));
-        })
-        .add_children(&legs)
-        .add_child(aim)
-        .id();
+    spawn_parts(commands, &assets.launcher, launcher);
+    commands.entity(aim).add_children(&[rifle, launcher]);
+    commands.entity(pivot).add_child(aim);
     commands.entity(root).add_child(pivot).insert(SoldierParts {
         pivot,
         aim,
-        legs,
+        hips,
+        knees,
         rifle,
         launcher,
     });
@@ -804,47 +879,57 @@ fn animate_soldiers(
         } else {
             match s.stance {
                 Stance::Stand => (Vec3::ZERO, Quat::IDENTITY),
-                Stance::Crouch => (Vec3::new(0.0, -0.42, 0.0), Quat::from_rotation_x(-0.2)),
-                Stance::Prone => (Vec3::new(0.0, 0.2, 0.85), Quat::from_rotation_x(-FRAC_PI_2)),
+                Stance::Crouch => (Vec3::new(0.0, -0.4, 0.05), Quat::from_rotation_x(-0.15)),
+                Stance::Prone => (Vec3::new(0.0, 0.18, 0.85), Quat::from_rotation_x(-FRAC_PI_2)),
             }
         };
         if let Ok((mut t, _)) = parts.get_mut(sp.pivot) {
             t.translation = t.translation.lerp(target_t, k);
             t.rotation = t.rotation.slerp(target_r, k);
         }
-        let swing = if health.dead {
+        // Legs: swing from the hip, bend at the knee; kneel when crouched.
+        let gait = if health.dead {
             0.0
         } else {
-            s.walk_phase.sin() * (s.velocity.length() / 4.0).min(1.0) * 0.6
+            (s.velocity.length() / 3.5).min(1.2)
         };
-        let crouch = if s.stance == Stance::Crouch && !health.dead {
-            -1.1
-        } else {
-            0.0
-        };
-        for (i, leg) in sp.legs.iter().enumerate() {
-            if let Ok((mut t, _)) = parts.get_mut(*leg) {
-                let sign = if i == 0 { 1.0 } else { -1.0 };
-                let target = Quat::from_rotation_x(swing * sign + crouch);
-                t.rotation = t.rotation.slerp(target, k);
+        for i in 0..2 {
+            let phase = s.walk_phase + if i == 0 { 0.0 } else { std::f32::consts::PI };
+            let (hip, knee) = if health.dead || s.stance == Stance::Prone {
+                (0.0, -0.1 * gait * phase.sin().abs())
+            } else if s.stance == Stance::Crouch {
+                let kneel = if i == 0 { (1.45, -2.2) } else { (0.5, -1.9) };
+                (kneel.0 + phase.sin() * 0.25 * gait, kneel.1)
+            } else {
+                let swing = phase.sin() * 0.5 * gait;
+                let bend = -((phase + 1.3).sin().max(0.0)) * 0.9 * gait - 0.05;
+                (swing, bend)
+            };
+            if let Ok((mut t, _)) = parts.get_mut(sp.hips[i]) {
+                t.rotation = t.rotation.slerp(Quat::from_rotation_x(hip), k);
+            }
+            if let Ok((mut t, _)) = parts.get_mut(sp.knees[i]) {
+                t.rotation = t.rotation.slerp(Quat::from_rotation_x(knee), k);
             }
         }
         if let Ok((mut t, _)) = parts.get_mut(sp.aim) {
             let pitch = match (health.dead, s.stance) {
                 (true, _) => 0.0,
                 (_, Stance::Prone) => s.pitch * 0.5 + FRAC_PI_2 * 0.95,
-                (_, Stance::Crouch) => s.pitch + 0.2,
+                (_, Stance::Crouch) => s.pitch + 0.15,
                 _ if s.sprinting => -0.6,
                 _ => s.pitch,
             };
             t.rotation = Quat::from_rotation_x(pitch);
         }
         let launcher = s.held == WeaponKind::Launcher;
-        if let Ok((_, mut v)) = parts.get_mut(sp.rifle) {
-            *v = if launcher {
-                Visibility::Hidden
+        if let Ok((mut t, mut v)) = parts.get_mut(sp.rifle) {
+            *v = Visibility::Inherited;
+            // The rifle is slung across the back while the launcher is shouldered.
+            *t = if launcher {
+                Transform::from_xyz(-0.05, -0.1, 0.42).with_rotation(Quat::from_rotation_z(0.6))
             } else {
-                Visibility::Inherited
+                Transform::IDENTITY
             };
         }
         if let Ok((mut t, mut v)) = parts.get_mut(sp.launcher) {
@@ -853,20 +938,12 @@ fn animate_soldiers(
             } else {
                 Visibility::Hidden
             };
-            // Carried on the back unless in use.
             *t = if launcher {
-                Transform::from_xyz(0.17, 0.08, -0.15)
-                    .with_rotation(Quat::from_rotation_x(FRAC_PI_2))
+                Transform::from_xyz(0.16, 0.06, -0.15)
             } else {
-                Transform::from_xyz(0.1, -0.1, 0.35)
-                    .with_rotation(Quat::from_rotation_x(FRAC_PI_2 * 0.5))
+                Transform::from_xyz(0.12, -0.12, 0.33).with_rotation(Quat::from_rotation_x(-1.1))
             };
         }
     }
 }
 
-/// Muzzle flash / shadow casters for the local first-person body are hidden elsewhere.
-#[allow(dead_code)]
-pub fn hide_shadow(commands: &mut Commands, e: Entity) {
-    commands.entity(e).insert(NotShadowCaster);
-}
