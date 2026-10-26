@@ -87,9 +87,13 @@ cargo run --release -- --render-scale 0.5     # render the 3D scene at 50% resol
 | View distance | 900 m | 1.4 km | 1.9 km |
 | Tree draw distance | 500 m | 900 m | 1.5 km |
 
-The HUD always renders at full resolution. On an Intel UHD 620 laptop (i5-10210U) the game runs
-at about 60 fps on Low (the display's refresh cap), 38 fps on Medium and 16 fps on High. On very weak
-GPUs, lower `--render-scale` further (down to 0.25).
+The HUD always renders at full resolution. On an Intel UHD 620 laptop (i5-10210U) the game averages
+about 95 fps on Low, 40 fps on Medium and 16 fps on High. On very weak GPUs, lower
+`--render-scale` further (down to 0.25).
+
+Static props (trees, bushes, rocks, building details) are grouped into 128 m chunks that are
+shown or hidden as a whole, so the cost of the 30,000-odd trees scales with what's near you rather
+than with the size of the island.
 
 ## Multiplayer
 
