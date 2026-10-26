@@ -2,7 +2,7 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use bevy::{light::NotShadowCaster, prelude::*};
+use bevy::prelude::*;
 
 use crate::ai::{Targets, ballistic_aim};
 use crate::audio::{PlaySound, SoundKind};
@@ -97,7 +97,7 @@ static HELI: VehicleSpec = VehicleSpec {
     armor: 1,
     seats: 6,
     weapons: &[(WeaponKind::Minigun, 3), (WeaponKind::Rockets, 2)],
-    turret_pos: Vec3::new(0.0, 0.7, -2.7),
+    turret_pos: Vec3::new(0.0, 0.55, -2.45),
     barrel_len: 0.9,
     turret_speed: 3.0,
     pitch_limits: (-1.3, 0.2),
@@ -234,11 +234,35 @@ pub struct ExitVehicle {
     pub soldier: Entity,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Group {
+    Hull,
+    Turret,
+    Gun,
+    MainRotor,
+    TailRotor,
+}
+
+#[derive(Clone, Copy)]
+enum VMat {
+    Body,
+    Trim,
+    Dark,
+    Glass,
+    Metal,
+}
+
+/// One piece of a vehicle model, positioned in its group's local space.
+struct VPart {
+    mesh: Handle<Mesh>,
+    at: Transform,
+    mat: VMat,
+    group: Group,
+}
+
 #[derive(Resource)]
 pub struct VehicleAssets {
-    cube: Handle<Mesh>,
-    cyl: Handle<Mesh>,
-    sphere: Handle<Mesh>,
+    blueprints: [Vec<VPart>; 3],
     paint: [[Handle<StandardMaterial>; 3]; 2],
     dark: Handle<StandardMaterial>,
     glass: Handle<StandardMaterial>,
@@ -292,7 +316,7 @@ fn setup_vehicle_assets(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let glass = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.15, 0.2, 0.25, 0.6),
+        base_color: Color::srgba(0.12, 0.17, 0.22, 0.65),
         alpha_mode: AlphaMode::Blend,
         perceptual_roughness: 0.05,
         metallic: 0.5,
@@ -309,84 +333,166 @@ fn setup_vehicle_assets(
     let paint = [
         [
             m(Color::srgb(0.6, 0.54, 0.4), 0.7, 0.1),
-            m(Color::srgb(0.55, 0.5, 0.38), 0.7, 0.1),
+            m(Color::srgb(0.5, 0.45, 0.34), 0.75, 0.1),
             m(Color::srgb(0.24, 0.27, 0.21), 0.6, 0.1),
         ],
         [
             m(Color::srgb(0.3, 0.35, 0.24), 0.7, 0.1),
-            m(Color::srgb(0.27, 0.32, 0.22), 0.7, 0.1),
+            m(Color::srgb(0.25, 0.29, 0.2), 0.75, 0.1),
             m(Color::srgb(0.32, 0.36, 0.3), 0.6, 0.1),
         ],
     ];
+    let dark = m(Color::srgb(0.07, 0.07, 0.07), 0.9, 0.0);
+    let metal = m(Color::srgb(0.16, 0.16, 0.16), 0.4, 0.7);
+    let wreck = m(Color::srgb(0.07, 0.065, 0.06), 1.0, 0.0);
+    let blueprints = [
+        blueprint(&mut meshes, VehicleKind::Jeep),
+        blueprint(&mut meshes, VehicleKind::Ifv),
+        blueprint(&mut meshes, VehicleKind::Heli),
+    ];
     commands.insert_resource(VehicleAssets {
-        cube: meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-        cyl: meshes.add(Cylinder::new(1.0, 1.0)),
-        sphere: meshes.add(Sphere::new(1.0)),
+        blueprints,
         paint,
-        dark: m(Color::srgb(0.08, 0.08, 0.08), 0.9, 0.0),
+        dark,
         glass,
-        metal: m(Color::srgb(0.15, 0.15, 0.15), 0.4, 0.7),
-        wreck: m(Color::srgb(0.07, 0.065, 0.06), 1.0, 0.0),
+        metal,
+        wreck,
     });
 }
 
-struct ModelBuilder<'a, 'w, 's> {
-    commands: &'a mut Commands<'w, 's>,
-    assets: &'a VehicleAssets,
-    parts: Vec<Entity>,
-}
-
-#[derive(Clone, Copy)]
-enum M {
-    Cube,
-    Cyl,
-    Sphere,
-}
-
-impl ModelBuilder<'_, '_, '_> {
-    fn part(
-        &mut self,
-        mesh: M,
-        mat: &Handle<StandardMaterial>,
-        pos: Vec3,
-        scale: Vec3,
-        rot: Quat,
-    ) -> Entity {
-        let mesh = match mesh {
-            M::Cube => self.assets.cube.clone(),
-            M::Cyl => self.assets.cyl.clone(),
-            M::Sphere => self.assets.sphere.clone(),
-        };
-        let e = self
-            .commands
-            .spawn((
-                Mesh3d(mesh),
-                MeshMaterial3d(mat.clone()),
-                Transform {
-                    translation: pos,
-                    rotation: rot,
-                    scale,
-                },
-            ))
-            .id();
-        self.parts.push(e);
-        e
-    }
-
-    fn pivot(&mut self, pos: Vec3) -> Entity {
-        self.commands
-            .spawn((Transform::from_translation(pos), Visibility::default()))
-            .id()
-    }
-}
-
-/// Wheel/rotor cylinders lie along X by default after this rotation.
+/// Wheels and rotor hubs: a cylinder turned to lie along X.
 fn along_x() -> Quat {
     Quat::from_rotation_z(FRAC_PI_2)
 }
 
+/// Barrels and booms: a cylinder turned to lie along Z.
 fn along_z() -> Quat {
     Quat::from_rotation_x(FRAC_PI_2)
+}
+
+fn blueprint(meshes: &mut Assets<Mesh>, kind: VehicleKind) -> Vec<VPart> {
+    use crate::models::{capsule, cylinder, limb, rounded_box, tapered};
+    let mut parts = Vec::new();
+    let mut add = |mesh: Mesh, at: Transform, mat: VMat, group: Group| {
+        parts.push(VPart {
+            mesh: meshes.add(mesh),
+            at,
+            mat,
+            group,
+        });
+    };
+    let at = |x: f32, y: f32, z: f32| Transform::from_xyz(x, y, z);
+    let rb = |x: f32, y: f32, z: f32, r: f32| rounded_box(Vec3::new(x, y, z), r);
+    use Group::*;
+    use VMat::*;
+    match kind {
+        VehicleKind::Jeep => {
+            add(rb(2.15, 0.5, 4.6, 0.1), at(0.0, 0.8, 0.0), Body, Hull);
+            add(rb(2.05, 0.4, 1.6, 0.14), at(0.0, 1.2, -1.5).with_rotation(Quat::from_rotation_x(-0.06)), Body, Hull);
+            add(rb(1.6, 0.4, 0.08, 0.02), at(0.0, 1.02, -2.3), Dark, Hull);
+            add(rb(2.1, 0.78, 2.3, 0.12), at(0.0, 1.45, 0.35), Body, Hull);
+            add(rb(2.0, 0.1, 2.1, 0.04), at(0.0, 1.88, 0.4), Trim, Hull);
+            add(rb(1.8, 0.48, 0.04, 0.015), at(0.0, 1.62, -0.84).with_rotation(Quat::from_rotation_x(-0.12)), Glass, Hull);
+            for x in [-1.06f32, 1.06] {
+                add(rb(0.04, 0.36, 0.85, 0.015), at(x, 1.62, -0.2), Glass, Hull);
+                add(rb(0.04, 0.36, 0.75, 0.015), at(x, 1.62, 0.8), Glass, Hull);
+                for z in [-1.5f32, 1.55] {
+                    add(rb(0.42, 0.16, 1.15, 0.06), at(x * 0.88, 1.13, z), Trim, Hull);
+                    add(cylinder(0.46, 0.32, 24), at(x * 0.95, 0.46, z).with_rotation(along_x()), Dark, Hull);
+                    add(cylinder(0.24, 0.34, 16), at(x * 0.95, 0.46, z).with_rotation(along_x()), Metal, Hull);
+                }
+                add(cylinder(0.08, 0.05, 12), at(x * 0.7, 1.08, -2.32).with_rotation(along_z()), Glass, Hull);
+                add(rb(0.06, 0.16, 0.1, 0.02), at(x * 1.02, 1.75, -0.95), Dark, Hull);
+            }
+            add(rb(2.1, 0.55, 1.0, 0.08), at(0.0, 1.27, 1.85), Trim, Hull);
+            add(rb(2.25, 0.18, 0.16, 0.05), at(0.0, 0.62, -2.36), Dark, Hull);
+            add(rb(2.25, 0.18, 0.16, 0.05), at(0.0, 0.62, 2.36), Dark, Hull);
+            add(cylinder(0.012, 2.2, 6), at(-0.95, 2.6, 2.1), Dark, Hull);
+            // Gunner's ring, shield and the M2.
+            add(cylinder(0.56, 0.1, 24), at(0.0, -0.32, 0.0), Trim, Turret);
+            add(rb(0.95, 0.5, 0.05, 0.02), at(0.0, 0.08, -0.38), Trim, Turret);
+            for x in [-1.0f32, 1.0] {
+                add(rb(0.38, 0.45, 0.05, 0.02), at(x * 0.6, 0.06, -0.27).with_rotation(Quat::from_rotation_y(-x * 0.6)), Trim, Turret);
+            }
+            add(rb(0.16, 0.16, 0.55, 0.03), at(0.0, 0.0, 0.05), Metal, Gun);
+            add(cylinder(0.03, 1.1, 12), at(0.0, 0.0, -0.75).with_rotation(along_z()), Metal, Gun);
+            add(cylinder(0.045, 0.12, 12), at(0.0, 0.0, -1.3).with_rotation(along_z()), Metal, Gun);
+            add(rb(0.18, 0.2, 0.26, 0.03), at(0.19, -0.04, 0.0), Trim, Gun);
+            add(rb(0.04, 0.12, 0.04, 0.01), at(0.0, -0.1, 0.32), Dark, Gun);
+        }
+        VehicleKind::Ifv => {
+            add(rb(3.2, 1.0, 6.2, 0.12), at(0.0, 1.05, 0.0), Body, Hull);
+            add(rb(3.0, 0.66, 5.3, 0.14), at(0.0, 1.86, 0.45), Body, Hull);
+            add(rb(3.1, 0.14, 1.7, 0.05), at(0.0, 1.5, -3.0).with_rotation(Quat::from_rotation_x(-0.5)), Trim, Hull);
+            for x in [-1.0f32, 1.0] {
+                add(rb(0.08, 0.68, 6.3, 0.03), at(x * 1.7, 1.02, 0.0), Trim, Hull);
+                add(rb(0.62, 0.86, 6.6, 0.32), at(x * 1.36, 0.55, 0.0), Dark, Hull);
+                for k in 0..6 {
+                    let z = -2.4 + k as f32 * 0.96;
+                    add(cylinder(0.34, 0.5, 16), at(x * 1.36, 0.42, z).with_rotation(along_x()), Metal, Hull);
+                }
+                add(cylinder(0.33, 0.55, 16), at(x * 1.36, 0.78, -3.0).with_rotation(along_x()), Metal, Hull);
+                add(cylinder(0.3, 0.55, 16), at(x * 1.36, 0.75, 3.0).with_rotation(along_x()), Metal, Hull);
+                add(cylinder(0.07, 0.04, 10), at(x * 1.25, 1.62, -3.45).with_rotation(along_z()), Glass, Hull);
+                add(rb(0.05, 0.35, 0.9, 0.02), at(x * 1.61, 1.75, 2.2), Dark, Hull);
+            }
+            add(rb(2.2, 1.25, 0.06, 0.03), at(0.0, 1.25, 3.12), Trim, Hull);
+            // Turret.
+            add(rb(2.3, 0.75, 2.6, 0.18), at(0.0, 0.35, 0.3), Body, Turret);
+            add(rb(2.1, 0.5, 0.65, 0.08), at(0.0, 0.3, -1.05).with_rotation(Quat::from_rotation_x(0.4)), Trim, Turret);
+            add(cylinder(0.36, 0.26, 20), at(0.55, 0.82, 0.6), Trim, Turret);
+            add(rb(0.42, 0.36, 0.48, 0.06), at(-0.75, 0.86, -0.2), Metal, Turret);
+            add(rb(0.45, 0.42, 1.05, 0.06), at(-1.32, 0.48, 0.45), Trim, Turret);
+            add(rb(2.0, 0.3, 0.6, 0.05), at(0.0, 0.35, 1.78), Dark, Turret);
+            add(cylinder(0.01, 2.0, 6), at(0.9, 1.7, 1.3), Dark, Turret);
+            for (x, z) in [(1.12f32, -0.6f32), (1.12, -0.35), (-1.12, -0.6), (-1.12, -0.35)] {
+                add(cylinder(0.06, 0.25, 10), at(x, 0.62, z).with_rotation(Quat::from_rotation_x(0.9)), Dark, Turret);
+            }
+            add(rb(0.75, 0.5, 0.45, 0.08), at(0.0, 0.0, 0.0), Trim, Gun);
+            add(cylinder(0.065, 2.6, 14), at(0.0, 0.0, -1.5).with_rotation(along_z()), Metal, Gun);
+            add(cylinder(0.09, 0.26, 14), at(0.0, 0.0, -2.85).with_rotation(along_z()), Metal, Gun);
+            add(cylinder(0.025, 0.5, 8), at(0.32, 0.05, -0.5).with_rotation(along_z()), Metal, Gun);
+        }
+        VehicleKind::Heli => {
+            add(rb(1.9, 1.75, 3.6, 0.5), at(0.0, 1.65, 0.0), Body, Hull);
+            add(Sphere::new(1.0).mesh().uv(24, 16), at(0.0, 1.47, -1.9).with_scale(Vec3::new(0.93, 0.82, 1.3)), Body, Hull);
+            add(Sphere::new(1.0).mesh().uv(24, 16), at(0.0, 1.95, -1.85).with_scale(Vec3::new(0.86, 0.66, 1.05)), Glass, Hull);
+            add(capsule(0.5, 1.8), at(0.0, 2.72, 0.4).with_rotation(along_z()).with_scale(Vec3::new(1.15, 1.0, 1.0)), Trim, Hull);
+            add(tapered(0.48, 0.17, 5.4, 18), at(0.0, 2.15, 4.25).with_rotation(along_z()), Body, Hull);
+            add(rb(0.12, 1.5, 0.9, 0.05), at(0.0, 2.75, 6.8).with_rotation(Quat::from_rotation_x(-0.3)), Body, Hull);
+            add(rb(1.9, 0.07, 0.5, 0.03), at(0.0, 2.15, 6.0), Body, Hull);
+            for x in [-1.0f32, 1.0] {
+                add(cylinder(0.06, 4.2, 10), at(x, 0.06, -0.1).with_rotation(along_z()), Dark, Hull);
+                add(cylinder(0.06, 0.45, 10), at(x, 0.2, -2.35).with_rotation(Quat::from_rotation_x(1.0)), Dark, Hull);
+                for z in [-1.1f32, 1.0] {
+                    let (mesh, t) = limb(0.05, Vec3::new(x, 0.06, z), Vec3::new(x * 0.72, 0.85, z));
+                    add(mesh, t, Dark, Hull);
+                }
+                add(rb(1.1, 0.08, 0.55, 0.03), at(x * 1.3, 1.35, -0.3), Body, Hull);
+                add(cylinder(0.2, 1.3, 14), at(x * 1.55, 1.15, -0.3).with_rotation(along_z()), Trim, Hull);
+                add(cylinder(0.21, 0.04, 14), at(x * 1.55, 1.15, -0.96).with_rotation(along_z()), Dark, Hull);
+                add(rb(0.05, 0.6, 1.0, 0.02), at(x * 0.96, 2.0, -0.2), Glass, Hull);
+            }
+            add(cylinder(0.12, 0.5, 10), at(0.0, -0.25, 0.0), Dark, MainRotor);
+            add(cylinder(0.25, 0.25, 14), at(0.0, 0.0, 0.0), Dark, MainRotor);
+            for i in 0..4 {
+                let rot = Quat::from_rotation_y(i as f32 * FRAC_PI_2);
+                add(
+                    rb(0.32, 0.04, 7.2, 0.015),
+                    Transform::from_translation(rot * Vec3::new(0.0, 0.08, -3.75)).with_rotation(rot),
+                    Dark,
+                    MainRotor,
+                );
+            }
+            add(rb(0.04, 2.2, 0.18, 0.015), at(0.0, 0.0, 0.0), Dark, TailRotor);
+            add(rb(0.04, 0.18, 2.2, 0.015), at(0.0, 0.0, 0.0), Dark, TailRotor);
+            add(Sphere::new(0.2).mesh().uv(14, 10), at(0.0, 0.0, 0.0), Dark, Turret);
+            for (x, y) in [(0.0f32, 0.03f32), (-0.026, -0.015), (0.026, -0.015)] {
+                add(cylinder(0.014, 0.75, 8), at(x, y, -0.45).with_rotation(along_z()), Metal, Gun);
+            }
+        }
+    }
+    parts
 }
 
 pub fn spawn_vehicle(
@@ -398,128 +504,68 @@ pub fn spawn_vehicle(
     yaw: f32,
 ) -> Entity {
     let fi = if paint == Faction::Blufor { 0 } else { 1 };
-    let body = assets.paint[fi][0].clone();
-    let body2 = assets.paint[fi][1].clone();
-    let heli_paint = assets.paint[fi][2].clone();
-    let dark = assets.dark.clone();
-    let glass = assets.glass.clone();
-    let metal = assets.metal.clone();
-    let mut b = ModelBuilder {
-        commands,
-        assets,
-        parts: Vec::new(),
-    };
-    let i = Quat::IDENTITY;
-    let mut children = Vec::new();
-    let mut rotors = Vec::new();
-    let turret;
-    let gun;
-    match kind {
-        VehicleKind::Jeep => {
-            children.push(b.part(M::Cube, &body, Vec3::new(0.0, 0.8, 0.0), Vec3::new(2.15, 0.55, 4.7), i));
-            children.push(b.part(M::Cube, &body2, Vec3::new(0.0, 1.2, -1.55), Vec3::new(2.05, 0.4, 1.6), i));
-            children.push(b.part(M::Cube, &body, Vec3::new(0.0, 1.45, 0.45), Vec3::new(2.15, 0.85, 2.6), i));
-            children.push(b.part(M::Cube, &body2, Vec3::new(0.0, 1.95, 0.45), Vec3::new(2.1, 0.12, 2.4), i));
-            children.push(b.part(
-                M::Cube,
-                &glass,
-                Vec3::new(0.0, 1.62, -0.88),
-                Vec3::new(1.9, 0.5, 0.05),
-                Quat::from_rotation_x(-0.25),
-            ));
-            for (x, z) in [(-1.0, -1.5), (1.0, -1.5), (-1.0, 1.55), (1.0, 1.55)] {
-                children.push(b.part(M::Cyl, &dark, Vec3::new(x, 0.46, z), Vec3::new(0.46, 0.36, 0.46), along_x()));
-            }
-            turret = b.pivot(JEEP.turret_pos);
-            let shield = b.part(M::Cube, &body2, Vec3::new(0.0, 0.2, -0.35), Vec3::new(0.9, 0.55, 0.05), i);
-            let ring = b.part(M::Cyl, &body2, Vec3::new(0.0, -0.12, 0.0), Vec3::new(0.55, 0.1, 0.55), i);
-            gun = b.pivot(Vec3::new(0.0, 0.32, 0.0));
-            let recv = b.part(M::Cube, &metal, Vec3::new(0.0, 0.0, 0.05), Vec3::new(0.16, 0.16, 0.55), i);
-            let barrel = b.part(M::Cyl, &metal, Vec3::new(0.0, 0.0, -0.75), Vec3::new(0.035, 1.1, 0.035), along_z());
-            b.commands.entity(gun).add_children(&[recv, barrel]);
-            b.commands.entity(turret).add_children(&[shield, ring, gun]);
-            children.push(turret);
-        }
-        VehicleKind::Ifv => {
-            children.push(b.part(M::Cube, &body, Vec3::new(0.0, 1.05, 0.1), Vec3::new(3.2, 1.0, 6.3), i));
-            children.push(b.part(
-                M::Cube,
-                &body2,
-                Vec3::new(0.0, 1.3, -3.25),
-                Vec3::new(3.2, 0.7, 1.3),
-                Quat::from_rotation_x(-0.55),
-            ));
-            children.push(b.part(M::Cube, &body2, Vec3::new(0.0, 1.85, 0.4), Vec3::new(3.0, 0.65, 5.6), i));
-            for x in [-1.6f32, 1.6] {
-                children.push(b.part(M::Cube, &dark, Vec3::new(x, 0.55, 0.0), Vec3::new(0.62, 1.0, 6.8), i));
-                for k in 0..6 {
-                    let z = -2.6 + k as f32 * 1.04;
-                    children.push(b.part(
-                        M::Cyl,
-                        &body2,
-                        Vec3::new(x * 1.03, 0.42, z),
-                        Vec3::new(0.38, 0.2, 0.38),
-                        along_x(),
-                    ));
-                }
-            }
-            turret = b.pivot(IFV.turret_pos);
-            let tbody = b.part(M::Cube, &body, Vec3::new(0.0, 0.35, 0.2), Vec3::new(2.0, 0.7, 2.6), i);
-            let hatch = b.part(M::Cyl, &body2, Vec3::new(0.45, 0.75, 0.6), Vec3::new(0.4, 0.12, 0.4), i);
-            let sight = b.part(M::Cube, &metal, Vec3::new(-0.7, 0.85, -0.3), Vec3::new(0.35, 0.3, 0.45), i);
-            gun = b.pivot(Vec3::new(0.0, 0.35, -1.1));
-            let mantlet = b.part(M::Cube, &body2, Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.7, 0.45, 0.4), i);
-            let barrel = b.part(M::Cyl, &metal, Vec3::new(0.0, 0.0, -1.5), Vec3::new(0.07, 2.6, 0.07), along_z());
-            let coax = b.part(M::Cyl, &metal, Vec3::new(0.3, 0.05, -0.5), Vec3::new(0.03, 0.6, 0.03), along_z());
-            b.commands.entity(gun).add_children(&[mantlet, barrel, coax]);
-            b.commands.entity(turret).add_children(&[tbody, hatch, sight, gun]);
-            children.push(turret);
-        }
-        VehicleKind::Heli => {
-            let p = &heli_paint;
-            children.push(b.part(M::Cube, p, Vec3::new(0.0, 1.6, -0.1), Vec3::new(1.9, 1.7, 4.4), i));
-            children.push(b.part(M::Sphere, p, Vec3::new(0.0, 1.35, -2.3), Vec3::new(0.95, 0.8, 1.2), i));
-            children.push(b.part(M::Sphere, &glass, Vec3::new(0.0, 1.85, -2.1), Vec3::new(0.88, 0.7, 0.95), i));
-            children.push(b.part(M::Cube, p, Vec3::new(0.0, 2.05, 4.4), Vec3::new(0.45, 0.5, 5.0), i));
-            children.push(b.part(M::Cube, p, Vec3::new(0.0, 2.65, 6.75), Vec3::new(0.12, 1.4, 0.9), i));
-            children.push(b.part(M::Cube, p, Vec3::new(0.0, 2.05, 6.0), Vec3::new(2.0, 0.08, 0.5), i));
-            children.push(b.part(M::Cube, p, Vec3::new(0.0, 2.75, 0.3), Vec3::new(1.2, 0.6, 2.2), i));
-            for x in [-1.0f32, 1.0] {
-                children.push(b.part(M::Cube, &dark, Vec3::new(x, 0.06, -0.2), Vec3::new(0.12, 0.12, 4.2), i));
-                for z in [-1.2f32, 1.0] {
-                    children.push(b.part(M::Cube, &dark, Vec3::new(x * 0.9, 0.38, z), Vec3::new(0.08, 0.65, 0.08), i));
-                }
-                children.push(b.part(M::Cube, p, Vec3::new(x * 1.05, 1.3, -0.4), Vec3::new(0.9, 0.08, 0.6), i));
-                children.push(b.part(M::Cyl, &dark, Vec3::new(x * 1.35, 1.15, -0.4), Vec3::new(0.2, 1.4, 0.2), along_z()));
-            }
-            let main_rotor = b.pivot(Vec3::new(0.0, 3.2, 0.1));
-            let hub = b.part(M::Cyl, &dark, Vec3::ZERO, Vec3::new(0.25, 0.3, 0.25), i);
-            let blade1 = b.part(M::Cube, &dark, Vec3::Y * 0.1, Vec3::new(0.35, 0.04, 14.0), i);
-            let blade2 = b.part(M::Cube, &dark, Vec3::Y * 0.1, Vec3::new(14.0, 0.04, 0.35), i);
-            b.commands.entity(main_rotor).add_children(&[hub, blade1, blade2]);
-            let tail_rotor = b.pivot(Vec3::new(0.25, 2.75, 6.9));
-            let t1 = b.part(M::Cube, &dark, Vec3::ZERO, Vec3::new(0.04, 2.2, 0.2), i);
-            let t2 = b.part(M::Cube, &dark, Vec3::ZERO, Vec3::new(0.04, 0.2, 2.2), i);
-            b.commands.entity(tail_rotor).add_children(&[t1, t2]);
-            children.push(main_rotor);
-            children.push(tail_rotor);
-            rotors.push((main_rotor, Vec3::Y));
-            rotors.push((tail_rotor, Vec3::X));
-            turret = b.pivot(HELI.turret_pos);
-            let ball = b.part(M::Sphere, &dark, Vec3::ZERO, Vec3::splat(0.25), i);
-            gun = b.pivot(Vec3::ZERO);
-            let barrel = b.part(M::Cyl, &metal, Vec3::new(0.0, 0.0, -0.45), Vec3::new(0.06, 0.8, 0.06), along_z());
-            b.commands.entity(gun).add_child(barrel);
-            b.commands.entity(turret).add_children(&[ball, gun]);
-            children.push(turret);
-        }
-    }
-    let parts = std::mem::take(&mut b.parts);
     let spec = match kind {
         VehicleKind::Jeep => &JEEP,
         VehicleKind::Ifv => &IFV,
         VehicleKind::Heli => &HELI,
     };
+    let material = |m: VMat| match (m, kind) {
+        (VMat::Body | VMat::Trim, VehicleKind::Heli) => assets.paint[fi][2].clone(),
+        (VMat::Body, _) => assets.paint[fi][0].clone(),
+        (VMat::Trim, _) => assets.paint[fi][1].clone(),
+        (VMat::Dark, _) => assets.dark.clone(),
+        (VMat::Glass, _) => assets.glass.clone(),
+        (VMat::Metal, _) => assets.metal.clone(),
+    };
+    let pivot = |commands: &mut Commands, at: Vec3| {
+        commands
+            .spawn((Transform::from_translation(at), Visibility::default()))
+            .id()
+    };
+    let turret = pivot(commands, spec.turret_pos);
+    let gun = pivot(
+        commands,
+        match kind {
+            VehicleKind::Jeep => Vec3::new(0.0, 0.15, 0.0),
+            VehicleKind::Ifv => Vec3::new(0.0, 0.35, -1.1),
+            VehicleKind::Heli => Vec3::ZERO,
+        },
+    );
+    commands.entity(turret).add_child(gun);
+    let mut children = vec![turret];
+    let mut rotors = Vec::new();
+    let (main_rotor, tail_rotor) = if kind == VehicleKind::Heli {
+        let m = pivot(commands, Vec3::new(0.0, 3.3, 0.2));
+        let t = pivot(commands, Vec3::new(0.28, 2.8, 6.95));
+        children.extend([m, t]);
+        rotors.push((m, Vec3::Y));
+        rotors.push((t, Vec3::X));
+        (Some(m), Some(t))
+    } else {
+        (None, None)
+    };
+    let mut parts = Vec::new();
+    for p in &assets.blueprints[kind as usize] {
+        let e = commands
+            .spawn((Mesh3d(p.mesh.clone()), MeshMaterial3d(material(p.mat)), p.at))
+            .id();
+        parts.push(e);
+        match p.group {
+            Group::Hull => children.push(e),
+            Group::Turret => {
+                commands.entity(turret).add_child(e);
+            }
+            Group::Gun => {
+                commands.entity(gun).add_child(e);
+            }
+            Group::MainRotor => {
+                commands.entity(main_rotor.unwrap()).add_child(e);
+            }
+            Group::TailRotor => {
+                commands.entity(tail_rotor.unwrap()).add_child(e);
+            }
+        }
+    }
     let root = commands
         .spawn((
             Vehicle {
@@ -1284,7 +1330,3 @@ fn hide_occupants(
     }
 }
 
-#[allow(dead_code)]
-fn no_shadows(commands: &mut Commands, e: Entity) {
-    commands.entity(e).insert(NotShadowCaster);
-}
