@@ -510,9 +510,16 @@ fn soldier_ai(
             let aligned = angle_diff(s.yaw, ty).abs() < 0.06 && (tp - s.pitch).abs() < 0.06;
             let in_range = d < if kind == WeaponKind::Launcher { 400.0 } else { 650.0 };
             let can_hurt = !t.is_vehicle || kind.stats().ap >= 2 || d < 150.0;
+            let fire_line = (eye, eye + dir_from_angles(s.yaw, s.pitch) * d);
+            let friendly_in_way = targets.list.iter().any(|f| {
+                f.faction == s.faction && f.entity != me && !f.dead && {
+                    let (_, _, d2) = closest_segments(fire_line.0, fire_line.1, f.aim, f.aim);
+                    d2 < if f.is_vehicle { 9.0 } else { 1.5 }
+                }
+            });
             brain.fire_wait -= dt;
             brain.burst_time -= dt;
-            if brain.reaction <= 0.0 && aligned && in_range && can_hurt {
+            if brain.reaction <= 0.0 && aligned && in_range && can_hurt && !friendly_in_way {
                 if brain.burst_time > 0.0 {
                     intent.fire = true;
                 } else if brain.fire_wait <= 0.0 {

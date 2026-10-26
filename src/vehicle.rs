@@ -900,16 +900,18 @@ fn heli_physics(
 fn run_over(
     vehicles: Query<(Entity, &Vehicle, &Transform)>,
     soldiers: Query<(Entity, &Soldier, &Transform, &Health), Without<Vehicle>>,
+    humans: Query<(), With<crate::player::Human>>,
     mut damage: MessageWriter<Damage>,
 ) {
-    for (ve, v, vtf) in &vehicles {
+    for (_, v, vtf) in &vehicles {
+        let ai_driver = v.driver.is_some_and(|d| !humans.contains(d));
         if v.kind == VehicleKind::Heli || v.speed.abs() < 3.5 {
             continue;
         }
         let half = v.spec().half + Vec3::new(0.3, 0.0, 0.3);
         let center = v.center(vtf);
         for (se, s, stf, h) in &soldiers {
-            if h.dead || s.vehicle.is_some() {
+            if h.dead || s.vehicle.is_some() || (ai_driver && v.crew_faction == Some(s.faction)) {
                 continue;
             }
             let p = stf.translation + Vec3::Y * 0.5;
@@ -918,7 +920,6 @@ fn run_over(
             }
             let local = vtf.rotation.inverse() * (p - center);
             if local.x.abs() < half.x && local.z.abs() < half.z && local.y.abs() < half.y + 0.5 {
-                let _ = ve;
                 damage.write(Damage {
                     target: se,
                     amount: 60.0 * v.speed.abs(),
