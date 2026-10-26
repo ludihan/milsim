@@ -109,7 +109,10 @@ fn setup_hud(
 ) {
     let white = Color::srgba(0.95, 0.95, 0.9, 0.95);
     let dim = Color::srgba(0.85, 0.88, 0.8, 0.85);
-    let shadow = TextShadow::default();
+    let shadow = TextShadow {
+        offset: Vec2::new(1.0, 1.0),
+        color: Color::srgba(0.0, 0.0, 0.0, 0.85),
+    };
 
     commands.spawn((
         Vignette,
@@ -410,7 +413,7 @@ fn compass_tape(heading_deg: f32) -> String {
             270 => "W",
             315 => "NW",
             x if x % 15 == 0 => "|",
-            _ => "·",
+            _ => ".",
         };
         if label.len() == 2 {
             s.push_str(label);

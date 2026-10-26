@@ -277,7 +277,8 @@ pub fn segment_box_local(a: Vec3, b: Vec3, half: Vec3) -> Option<f32> {
 
 /// Military grid reference (100 m squares) for a world position.
 pub fn grid_ref(pos: Vec3) -> String {
-    let x = ((pos.x + 1024.0) / 10.0).floor().clamp(0.0, 999.0) as i32;
-    let y = ((1024.0 - pos.z) / 10.0).floor().clamp(0.0, 999.0) as i32;
+    let half = crate::terrain::MAP_HALF;
+    let x = ((pos.x + half) / 10.0).floor().clamp(0.0, 999.0) as i32;
+    let y = ((half - pos.z) / 10.0).floor().clamp(0.0, 999.0) as i32;
     format!("{x:03} {y:03}")
 }
