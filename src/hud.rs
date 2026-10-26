@@ -83,6 +83,13 @@ impl Plugin for HudPlugin {
     }
 }
 
+/// Only touch the text when it actually changes, so Bevy doesn't re-run text layout every frame.
+fn set_text(mut text: impl std::ops::DerefMut<Target = Text>, value: String) {
+    if text.0 != value {
+        text.0 = value;
+    }
+}
+
 fn font(size: f32) -> TextFont {
     TextFont {
         font_size: FontSize::Px(size),
@@ -386,14 +393,14 @@ fn update_feed(
         let extra = feed.lines.len() - FEED_LINES;
         feed.lines.drain(..extra);
     }
-    for (line, mut text, mut color) in &mut lines {
+    for (line, text, mut color) in &mut lines {
         match feed.lines.get(line.0) {
             Some((s, c, t)) => {
-                text.0.clone_from(s);
+                set_text(text, s.clone());
                 let fade = (14.0 - (now - t)).clamp(0.0, 2.0) / 2.0;
-                color.0 = c.with_alpha(fade);
+                color.set_if_neq(TextColor(c.with_alpha(fade)));
             }
-            None => text.0.clear(),
+            None => set_text(text, String::new()),
         }
     }
 }
@@ -460,11 +467,11 @@ fn update_texts(
     let yaw = view.yaw + view.look_yaw;
     let hdg = heading(yaw);
 
-    texts.p0().0 = if me.is_some() && !view.map_open {
+    set_text(texts.p0().into_inner(), if me.is_some() && !view.map_open {
         format!("{}\n{:03}", compass_tape(hdg), hdg.round() as i32 % 360)
     } else {
         String::new()
-    };
+    });
 
     // Nearest enemy-held sector as the current objective.
     let p2 = Vec2::new(pos.x, pos.z);
@@ -507,7 +514,7 @@ fn update_texts(
     } else if let NetMode::Host(_) = &*net {
         info.push_str("\nHosting co-op session");
     }
-    texts.p1().0 = info;
+    set_text(texts.p1().into_inner(), info);
 
     // Weapon / vehicle panel.
     let weapon = if !st.alive {
@@ -550,9 +557,9 @@ fn update_texts(
             if st.reloading { "\nRELOADING" } else { "" }
         )
     };
-    texts.p2().0 = weapon;
+    set_text(texts.p2().into_inner(), weapon);
 
-    texts.p3().0 = if st.alive {
+    set_text(texts.p3().into_inner(), if st.alive {
         format!(
             "{}{}",
             Stance::from_u8(st.stance).label(),
@@ -560,7 +567,7 @@ fn update_texts(
         )
     } else {
         String::new()
-    };
+    });
     bars.p0().width = Val::Percent(if st.alive { st.hp.clamp(0.0, 100.0) } else { 0.0 });
     bars.p1().width = Val::Percent(st.stamina.clamp(0.0, 1.0) * 100.0);
 
@@ -584,7 +591,7 @@ fn update_texts(
             ));
         }
     }
-    texts.p4().0 = if view.map_open { String::new() } else { squad };
+    set_text(texts.p4().into_inner(), if view.map_open { String::new() } else { squad });
 
     // Interaction prompt.
     let mut prompt = String::new();
@@ -614,7 +621,7 @@ fn update_texts(
             }
         }
     }
-    texts.p5().0 = prompt;
+    set_text(texts.p5().into_inner(), prompt);
 
     let big = if sectors.won {
         "MISSION ACCOMPLISHED\nAll sectors secured".to_string()
@@ -644,7 +651,7 @@ fn update_texts(
     } else {
         String::new()
     };
-    texts.p6().0 = big;
+    set_text(texts.p6().into_inner(), big);
 
     let hp_missing = if st.alive { 1.0 - st.hp / 100.0 } else { 0.0 };
     let a = (fb.hurt * 0.35 + hp_missing.max(0.0) * 0.25).min(0.6);
@@ -664,6 +671,7 @@ fn vehicle_name(kind: VehicleKind, paint: u8) -> &'static str {
 
 #[allow(clippy::type_complexity)]
 fn update_crosshair(
+    scene_scale: Res<crate::quality::SceneScale>,
     local: Res<LocalState>,
     view: Res<LocalView>,
     input: Res<crate::player::LocalInput>,
@@ -706,6 +714,7 @@ fn update_crosshair(
         let (node, vis) = &mut *p1;
         match marker {
             Some(px) => {
+                let px = px * scene_scale.0;
                 node.left = Val::Px(px.x);
                 node.top = Val::Px(px.y);
                 **vis = Visibility::Inherited;
@@ -723,6 +732,7 @@ fn update_crosshair(
 
 #[allow(clippy::type_complexity)]
 fn update_name_tags(
+    scene_scale: Res<crate::quality::SceneScale>,
     local: Res<LocalState>,
     view: Res<LocalView>,
     index: Res<NetIndex>,
@@ -763,7 +773,8 @@ fn update_name_tags(
             if head.distance(cam_tf.translation) < 200.0
                 && let Ok(px) = cam.world_to_viewport(&gt, head)
             {
-                text.0 = format!("{}", tag.0 + 2);
+                set_text(text.reborrow(), format!("{}", tag.0 + 2));
+                let px = px * scene_scale.0;
                 node.left = Val::Px(px.x - 4.0);
                 node.top = Val::Px(px.y - 8.0);
                 shown = true;
